@@ -87,9 +87,9 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
 .panel{background:var(--bg2);overflow-y:auto}
 .placeholder{color:var(--mut);text-align:center;padding:60px 20px;line-height:1.8}
 .detail{padding:14px}
-.summary{margin-right:330px}
-@media(max-width:1100px){.summary{margin-right:270px}}
-@media(max-width:900px){.summary{margin-right:0}}
+.summary, .secblock{margin-right:330px}
+@media(max-width:1100px){.summary, .secblock{margin-right:270px}}
+@media(max-width:900px){.summary, .secblock{margin-right:0}}
 .dhead{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
 .dhead h2{margin:0;font-size:17px}
 .dhead .dt{color:var(--mut);font-size:11px}
@@ -121,6 +121,13 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
 .evcol h4{margin:0 0 6px;font-size:12px;color:var(--txt);font-weight:600}
 .lapsel{margin-left:8px;background:var(--panel);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:3px 7px;font-size:12px;vertical-align:middle}
 canvas.chart{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;display:block}
+.cmpchips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.chip{border:1px solid var(--line);background:var(--bg2);color:var(--mut);border-radius:14px;padding:3px 11px;
+  font-size:12px;cursor:pointer;opacity:.45;transition:.15s;font-variant-numeric:tabular-nums}
+.chip::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c);
+  margin-right:6px;vertical-align:middle}
+.chip.on{opacity:1;color:#fff;border-color:var(--c);box-shadow:0 0 0 1px var(--c) inset}
+.chip:hover{opacity:.85}
 .adv{background:#1b1407;border:1px solid #3a2c0c;border-left:3px solid var(--amber);border-radius:8px;padding:10px 12px;margin-top:6px}
 .adv ul{margin:6px 0;padding-left:16px;line-height:1.65;font-size:12px}
 .adv li{margin-bottom:5px}

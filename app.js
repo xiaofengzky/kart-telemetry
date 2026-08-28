@@ -6,6 +6,9 @@ let curId = null;
 let map, trackLayer, satLayer, darkLayer, picking = false;
 let selLap = null;          // 刹车/油门事件表当前选中的圈
 let myMarker = null;          // 当前位置标记
+let cmpLaps = new Set();    // 速度对比图当前勾选的圈
+const CMP_COLORS = ['#3b9eff', '#e10600', '#2ecc71', '#f5a623', '#a259ff', '#16d6c9', '#ff7ac6', '#ffd23f', '#7ed957', '#ff6b6b'];
+const cmpColor = i => CMP_COLORS[(i - 1) % CMP_COLORS.length];
 
 const RAD = Math.PI / 180;
 const angDiff = (a, b) => { let d = a - b; while (d > 180) d -= 360; while (d < -180) d += 360; return d; };
@@ -383,6 +386,10 @@ function renderSidebar() {
 function selectSession(id) {
   curId = id; const s = SESSIONS.find(x => x.id === id);
   selLap = null;
+  // 速度对比默认勾选最快圈 + 第二快圈
+  const sorted = [...s.analysis.full].sort((x, y) => x.time_s - y.time_s);
+  cmpLaps = new Set([sorted[0].index]);
+  if (sorted[1]) cmpLaps.add(sorted[1].index);
   renderSidebar(); drawTrack(s); renderDetail(s);
   // 对齐框
   const cen = centroidPlot(s);
@@ -475,6 +482,11 @@ function renderDetail(s) {
       <div class="satnote">横轴=赛道进度0→100%；蓝=速度km/h，红=横向G；虚线=弯角位置</div></div>
     <div class="secblock"><h3>纵向G（刹车/油门曲线）</h3><canvas id="chartLong" class="chart" width="660" height="240"></canvas>
       <div class="satnote">红=刹车（纵向G为负），绿=油门（纵向G为正）；由速度差分推导，是卡丁车无刹车传感器时读刹车/油门点的标准做法</div></div>
+    <div class="secblock"><h3>多圈速度叠加对比</h3>
+      <div class="cmpchips" id="cmpChips">${a.full.map(l => `<button class="chip ${cmpLaps.has(l.index) ? 'on' : ''}" data-lap="${l.index}" style="--c:${cmpColor(l.index)}">#${l.index}</button>`).join('')}</div>
+      <canvas id="chartCompare" class="chart" width="680" height="300"></canvas>
+      <div class="satnote">同一张「赛道进度轴」上叠加所选圈的速度曲线，对比走线/刹车点差异。点击上方色块切换显示哪些圈（至少选 2 圈对比才有意义）。</div>
+    </div>
     <div class="secblock"><h3>每圈汇总</h3>${lapTab}</div>
     <div class="secblock"><h3>刹车 / 油门事件 <select id="lapSel" class="lapsel">${lapOpts}</select></h3>${evHtml || '<div class="satnote">无刹车/油门事件。</div>'}</div>
     <div class="secblock"><h3>弯角明细（最快圈）</h3>${cornerHtml}</div>
@@ -482,6 +494,15 @@ function renderDetail(s) {
     <div class="satnote">注：本 .vbo 的 GPS 为偏移坐标，赛道<b>形状</b>准确。左下角"对齐真实场地"可把赛道平移到真实卫星位置。</div>`;
   drawChart(document.getElementById('chart'), a.speedProfile, a.gProfile, a.corners);
   drawLongChart(document.getElementById('chartLong'), a.longGProfile, a.corners);
+  drawCompare(s);
+  const chips = document.getElementById('cmpChips');
+  if (chips) chips.onclick = e => {
+    const b = e.target.closest('.chip'); if (!b) return;
+    const idx = parseInt(b.dataset.lap, 10);
+    if (cmpLaps.has(idx)) cmpLaps.delete(idx); else cmpLaps.add(idx);
+    b.classList.toggle('on');
+    drawCompare(SESSIONS.find(x => x.id === curId));
+  };
   const selEl = document.getElementById('lapSel');
   if (selEl) selEl.onchange = () => { selLap = parseInt(selEl.value, 10); renderDetail(s); };
 }
@@ -542,6 +563,46 @@ function drawLongChart(cv, dp, corners) {
   ctx.fillText('赛道进度 →', W / 2, H - 6);
 }
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+
+/* 单圈速度曲线：按赛道进度 0→100% 重采样（不同圈长也按位置对齐） */
+function lapSpeedProfile(s, lap) {
+  const cum = s.analysis.cum, a = lap.startIdx, b = lap.endIdx, D = lap.distance_m, out = [];
+  for (let pct = 0; pct <= 100; pct++) {
+    const target = cum[a] + pct / 100 * D;
+    let ti = a; while (ti < b && cum[ti] < target) ti++;
+    out.push([pct, Math.round(s.points[ti].vel * 10) / 10]);
+  }
+  return out;
+}
+/* 多圈速度叠加对比 */
+function drawCompare(s) {
+  const cv = document.getElementById('chartCompare'); if (!cv) return;
+  const W = cv.width, H = cv.height, padL = 40, padR = 12, padT = 14, padB = 24;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  const laps = s.analysis.full.filter(l => cmpLaps.has(l.index));
+  if (!laps.length) {
+    ctx.fillStyle = '#8b98a5'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('请选择至少一圈进行对比', W / 2, H / 2); return;
+  }
+  const profs = laps.map(l => ({ lap: l, prof: lapSpeedProfile(s, l), color: cmpColor(l.index) }));
+  let vmax = 0; profs.forEach(p => p.prof.forEach(q => vmax = Math.max(vmax, q[1]))); vmax = vmax * 1.05 || 1;
+  const sx = p => padL + p / 100 * (W - padL - padR);
+  const sy = v => H - padB - v / vmax * (H - padT - padB);
+  // 网格 + Y 轴
+  ctx.strokeStyle = '#222b36'; ctx.lineWidth = 1; ctx.fillStyle = '#8b98a5'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+  for (let k = 0; k <= 4; k++) { const v = vmax * k / 4, y = sy(v); ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke(); ctx.fillText(v.toFixed(0), padL - 4, y + 3); }
+  // X 轴
+  ctx.textAlign = 'center';
+  for (let p = 0; p <= 100; p += 25) ctx.fillText(p + '%', sx(p), H - 8);
+  ctx.fillStyle = '#8b98a5'; ctx.fillText('赛道进度 →', W / 2, H - 6 + 0);
+  // 曲线
+  profs.forEach(p => { ctx.strokeStyle = p.color; ctx.lineWidth = 2; ctx.beginPath(); p.prof.forEach((q, i) => { const x = sx(q[0]), y = sy(q[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke(); });
+  // 图例（左上角，标圈号+圈速）
+  ctx.textAlign = 'left'; ctx.font = '11px sans-serif';
+  let ly = padT + 6;
+  profs.forEach(p => { ctx.fillStyle = p.color; ctx.fillRect(padL + 4, ly - 8, 11, 3); ctx.fillStyle = '#cdd6e0'; ctx.fillText('#' + p.lap.index + ' · ' + p.lap.time_s.toFixed(2) + 's', padL + 19, ly - 4); ly += 15; });
+}
 
 /* ---------- 对齐 ---------- */
 function centroidRaw(s) {
