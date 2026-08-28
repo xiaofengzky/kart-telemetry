@@ -4,6 +4,7 @@
 const SESSIONS = [];      // {id,name,date,points,offset,analysis}
 let curId = null;
 let map, trackLayer, satLayer, darkLayer, picking = false;
+let selLap = null;          // 刹车/油门事件表当前选中的圈
 let myMarker = null;          // 当前位置标记
 
 const RAD = Math.PI / 180;
@@ -41,7 +42,8 @@ function parseVBO(text) {
       const lon = parseCoord(p[3], false);
       const vel = parseFloat(p[4]);
       const hdg = parseFloat(p[5]);
-      pts.push({ lat, lon, vel, hdg, t: timeToSec(p[1]) });
+      const h = parseFloat(p[6]);
+      pts.push({ lat, lon, vel, hdg, h: isFinite(h) ? h : null, t: timeToSec(p[1]) });
     } catch (e) { /* skip */ }
   }
   return { comments, points: pts };
@@ -58,6 +60,77 @@ function project(points) {
     y: (p.lat - mlat) * RAD * R
   }));
 }
+/* 从纵向 G(driveG) 推导单圈刹车/油门事件与指标。卡丁车多无刹车传感器，专业做法是读 longitudinal G：
+   向下突刺=刹车点(起始)、深度=刹车力度、宽度=刹车距离；正向加速段=油门点(出弯)。
+   用较高阈值并过滤/合并短抖动，只保留真正有意义的驾驶阶段。 */
+function lapEvents(points, cum, driveG, latg, a, b, dist, vmax) {
+  const thrB = 0.35, thrT = 0.28, minLen = 2.5, mergeGap = 10;
+  // 用平滑后的 driveG 做阶段检测（抑制 25Hz 噪声），峰值仍用原始 driveG 保证准
+  const sm = new Array(b - a + 1);
+  for (let t = a; t <= b; t++) { let s = 0, c = 0; for (let k = Math.max(a, t - 1); k <= Math.min(b, t + 1); k++) { s += driveG[k]; c++; } sm[t] = s / c; }
+  const phases = (sign, thr) => {
+    const raw = []; let inc = false, st = 0;
+    for (let t = a; t <= b; t++) {
+      const on = sign < 0 ? sm[t] < -thr : sm[t] > thr;
+      if (on && !inc) { inc = true; st = t; }
+      if (!on && inc) { raw.push([st, t - 1]); inc = false; }
+    }
+    if (inc) raw.push([st, b]);
+    const filt = raw.filter(([s, e]) => (cum[e] - cum[s]) >= minLen);   // 去掉单点噪声
+    const merged = [];
+    for (const seg of filt) {                                             // 合并相邻同类型阶段
+      if (merged.length && (cum[seg[0]] - cum[merged[merged.length - 1][1]]) < mergeGap) merged[merged.length - 1] = [merged[merged.length - 1][0], seg[1]];
+      else merged.push(seg);
+    }
+    return merged;
+  };
+  const pkOf = (s, e, sign) => { let pk = s; for (let k = s; k <= e; k++) if (sign < 0 ? driveG[k] < driveG[pk] : driveG[k] > driveG[pk]) pk = k; return pk; };
+  const brakes = phases(-1, thrB).map(([s, e]) => {
+    const pk = pkOf(s, e, -1);
+    let lo = points[pk].vel, loi = pk;
+    for (let k = pk; k <= e; k++) if (points[k].vel < lo) { lo = points[k].vel; loi = k; }
+    return {
+      progress: Math.round(100 * (cum[s] - cum[a]) / dist * 10) / 10,
+      peakG: Math.round(-driveG[pk] * 100) / 100,
+      dist_m: Math.round((cum[e] - cum[s]) * 10) / 10,
+      entrySpeed: Math.round(points[s].vel * 10) / 10,
+      minSpeed: Math.round(lo * 10) / 10
+    };
+  });
+  const throttles = phases(1, thrT).map(([s, e]) => {
+    const pk = pkOf(s, e, 1);
+    return {
+      progress: Math.round(100 * (cum[s] - cum[a]) / dist * 10) / 10,
+      peakG: Math.round(driveG[pk] * 100) / 100,
+      dist_m: Math.round((cum[e] - cum[s]) * 10) / 10,
+      startSpeed: Math.round(points[s].vel * 10) / 10,
+      endSpeed: Math.round(points[e].vel * 10) / 10
+    };
+  });
+  let peakBrake = 0, peakThrottle = 0, gsum = 0;
+  for (let t = a; t <= b; t++) {
+    peakBrake = Math.min(peakBrake, driveG[t]);
+    peakThrottle = Math.max(peakThrottle, driveG[t]);
+    gsum = Math.max(gsum, Math.hypot(driveG[t], latg[t]));
+  }
+  let fo = 0, tot = 0;
+  for (let t = a + 1; t <= b; t++) {
+    tot += cum[t] - cum[t - 1];
+    if (Math.abs(driveG[t]) < 0.15 && points[t].vel > 0.85 * vmax) fo += cum[t] - cum[t - 1];
+  }
+  const minSpeed = Math.min(...points.slice(a, b + 1).map(p => p.vel));
+  return {
+    brakes, throttles,
+    metrics: {
+      brakeCount: brakes.length, throttleCount: throttles.length,
+      peakBrakeG: Math.round(-peakBrake * 100) / 100,
+      peakThrottleG: Math.round(peakThrottle * 100) / 100,
+      gsumPeak: Math.round(gsum * 100) / 100,
+      flatout_pct: tot ? Math.round(fo / tot * 100) : 0,
+      minSpeed: Math.round(minSpeed * 10) / 10
+    }
+  };
+}
 function analyze(points) {
   const n = points.length;
   const xy = project(points);
@@ -65,14 +138,21 @@ function analyze(points) {
   for (let i = 1; i < n; i++) {
     cum.push(cum[i - 1] + Math.hypot(xy[i].x - xy[i - 1].x, xy[i].y - xy[i - 1].y));
   }
-  // 横向G + 纵向G
-  const latg = new Array(n).fill(0), longa = new Array(n).fill(0);
+  // 横向G + 纵向G（driveG=分离坡度后的净纵向G：刹车为负，油门为正）
+  const latg = new Array(n).fill(0), longa = new Array(n).fill(0), driveG = new Array(n).fill(0);
   for (let i = 1; i < n - 1; i++) {
     const v = (points[i - 1].vel + points[i + 1].vel) / 2 / 3.6;
     const dh = angDiff(points[i + 1].hdg, points[i - 1].hdg);
     const dth = (points[i + 1].t - points[i - 1].t) || (2 / 25);
     latg[i] = v > 1 ? (v * (dh * RAD / dth) / 9.81) : 0;
-    longa[i] = ((points[i + 1].vel - points[i - 1].vel) / 3.6) / dth / 9.81;
+    const dvdt = ((points[i + 1].vel - points[i - 1].vel) / 3.6) / dth / 9.81;
+    let slope = 0;
+    if (points[i - 1].h != null && points[i + 1].h != null) {
+      const ds = (cum[i + 1] - cum[i - 1]) || 1;
+      slope = (points[i + 1].h - points[i - 1].h) / ds;
+    }
+    driveG[i] = dvdt - slope;
+    longa[i] = dvdt;
   }
   // 圈速：回到起点
   const sx = xy[0].x, sy = xy[0].y;
@@ -102,11 +182,17 @@ function analyze(points) {
     });
   }
   const full = laps.filter(l => l.time_s > 5);
+  const maxV = Math.max(...points.map(p => p.vel));
+  for (const l of full) {
+    const ev = lapEvents(points, cum, driveG, latg, l.startIdx, l.endIdx, l.distance_m, maxV);
+    l.brakeEvents = ev.brakes; l.throttleEvents = ev.throttles; l.metrics = ev.metrics;
+  }
   const best = full.length ? full.reduce((m, l) => l.time_s < m.time_s ? l : m) : null;
   const times = full.map(l => l.time_s);
   const avg = times.reduce((s, v) => s + v, 0) / (times.length || 1);
   const std = times.length ? Math.sqrt(times.reduce((s, v) => s + (v - avg) ** 2, 0) / times.length) : 0;
   const core = times.filter(t => Math.abs(t - avg) <= 1.6 * std);
+  const coreLaps = full.filter(l => Math.abs(l.time_s - avg) <= 1.6 * std);
   const coreAvg = core.length ? core.reduce((s, v) => s + v, 0) / core.length : avg;
   const coreStd = core.length > 1 ? Math.sqrt(core.reduce((s, v) => s + (v - coreAvg) ** 2, 0) / core.length) : 0;
   const grade = coreStd < 0.25 ? 'A 极佳' : coreStd < 0.5 ? 'B 良好' : coreStd < 0.9 ? 'C 一般' : 'D 波动大';
@@ -145,7 +231,7 @@ function analyze(points) {
     }
   }
   // 最快圈速度/G 曲线（100点）
-  const sp = [], gp = [];
+  const sp = [], gp = [], dp = [];
   if (best) {
     const a = best.startIdx, b = best.endIdx, D = best.distance_m;
     for (let pct = 0; pct <= 100; pct++) {
@@ -153,6 +239,7 @@ function analyze(points) {
       let ti = a; while (ti < b && cum[ti] < target) ti++;
       sp.push([pct, Math.round(points[ti].vel * 10) / 10]);
       gp.push([pct, Math.round(Math.abs(latg[ti]) * 100) / 100]);
+      dp.push([pct, Math.round(driveG[ti] * 100) / 100]);
     }
   }
   // 分段 & 波动区
@@ -194,13 +281,32 @@ function analyze(points) {
   }
   cands.sort((x, y) => y[0] - x[0]);
   for (const [sd, pct, m] of cands.slice(0, 3)) worstZones.push({ progress_pct: pct, mean_speed: Math.round(m * 10) / 10, std: Math.round(sd * 10) / 10 });
+  // 刹车点一致性：以最快圈每个刹车点为基准，看核心圈里对应刹车点位置的圈间标准差
+  const brakeConsistency = [];
+  if (best && coreLaps.length >= 2 && best.brakeEvents && best.brakeEvents.length) {
+    for (const re of best.brakeEvents) {
+      const arr = [];
+      for (const l of coreLaps) {
+        if (!l.brakeEvents || !l.brakeEvents.length) continue;
+        let be = l.brakeEvents[0], bd = 1e9;
+        for (const e of l.brakeEvents) { const d = Math.abs(e.progress - re.progress); if (d < bd) { bd = d; be = e; } }
+        arr.push(be.progress);
+      }
+      if (arr.length >= 2) {
+        const m = arr.reduce((s, v) => s + v, 0) / arr.length;
+        const sd = Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / arr.length);
+        brakeConsistency.push({ progress: re.progress, std: Math.round(sd * 100) / 100, peakG: re.peakG });
+      }
+    }
+    brakeConsistency.sort((x, y) => y.std - x.std);
+  }
   const vels = points.map(p => p.vel);
   return {
     laps, full, best, vmin: Math.min(...vels), vmax: Math.max(...vels),
     best_time: best ? Math.round(best.time_s * 100) / 100 : null,
     avg_lap: Math.round(avg * 100) / 100, core_avg: Math.round(coreAvg * 100) / 100,
     core_std: Math.round(coreStd * 100) / 100, grade, gradeCol,
-    corners, speedProfile: sp, gProfile: gp, sectors, worstZones, xy, cum
+    corners, speedProfile: sp, gProfile: gp, longGProfile: dp, sectors, worstZones, brakeConsistency, xy, cum
   };
 }
 
@@ -228,6 +334,8 @@ function initMap() {
     if (!picking || !curId) return;
     const s = SESSIONS.find(x => x.id === curId);
     applyAlign(s, e.latlng.lat, e.latlng.lng);
+    document.getElementById('alignLat').value = e.latlng.lat.toFixed(5);
+    document.getElementById('alignLon').value = e.latlng.lng.toFixed(5);
     picking = false; document.getElementById('pickAlign').classList.add('ghost');
     document.getElementById('alignNote').textContent = '已按地图点击位置对齐。';
     document.getElementById('alignNote').style.display = 'block';
@@ -273,6 +381,7 @@ function renderSidebar() {
 }
 function selectSession(id) {
   curId = id; const s = SESSIONS.find(x => x.id === id);
+  selLap = null;
   renderSidebar(); drawTrack(s); renderDetail(s);
   // 对齐框
   const cen = centroidPlot(s);
@@ -291,6 +400,8 @@ function renderDetail(s) {
   const a = s.analysis;
   const maxT = Math.max(...a.laps.map(l => l.time_s));
   const bestIdx = a.best ? a.best.index : -1;
+  const selIdx = selLap != null ? selLap : (a.best ? a.best.index : (a.full[0] && a.full[0].index));
+  const sel = a.full.find(l => l.index === selIdx) || a.best || a.full[0];
   let lapHtml = a.laps.map(l => {
     const w = Math.max(4, 100 * (1 - (l.time_s - (a.best_time || l.time_s)) / (maxT - (a.best_time || l.time_s) || 1)));
     return `<div class="lap${l.index === bestIdx ? ' best' : ''}"><span class="ln">#${l.index}</span>
@@ -302,12 +413,34 @@ function renderDetail(s) {
     ${a.corners.map(c => `<tr><td>${c.id}</td><td>${c.progress_pct}%</td><td>${c.entry_speed}</td><td class="b">${c.apex_speed}</td><td>${c.exit_speed}</td><td>${c.max_g}</td><td>${c.speed_loss}</td></tr>`).join('')}</table>`
     : '<div class="satnote">未能识别明显弯角。</div>';
 
+  // 每圈汇总表
+  let lapTab = a.full.length ? `<table class="ctab ev"><tr><th>圈</th><th>时间</th><th>刹车点</th><th>峰值减速度</th><th>峰值加速</th><th>最低速</th><th>全油门</th><th>G-Sum</th></tr>
+    ${a.full.map(l => `<tr class="${l.index === selIdx ? 'on' : ''}"><td>${l.index}</td><td>${l.time_s.toFixed(2)}</td><td>${l.metrics.brakeCount}</td><td>${l.metrics.peakBrakeG}G</td><td>${l.metrics.peakThrottleG}G</td><td>${l.metrics.minSpeed}</td><td>${l.metrics.flatout_pct}%</td><td>${l.metrics.gsumPeak}</td></tr>`).join('')}</table>`
+    : '';
+
+  // 选中圈刹车/油门事件表
+  const brk = (sel && sel.brakeEvents) ? sel.brakeEvents : [];
+  const thr = (sel && sel.throttleEvents) ? sel.throttleEvents : [];
+  let evHtml = '';
+  if (brk.length || thr.length) {
+    evHtml = `<div class="evwrap">
+      <div class="evcol"><h4>🛑 刹车点（#${sel ? sel.index : '-'}）</h4>
+        <table class="ctab ev"><tr><th>进度</th><th>峰值减速度</th><th>刹车距离</th><th>入弯速</th><th>刹车后最低速</th></tr>
+        ${brk.map(e => `<tr><td>${e.progress}%</td><td class="neg">${e.peakG}G</td><td>${e.dist_m}m</td><td>${e.entrySpeed}</td><td>${e.minSpeed}</td></tr>`).join('') || '<tr><td colspan="5" class="satnote">无</td></tr>'}</table></div>
+      <div class="evcol"><h4>🟢 油门点（#${sel ? sel.index : '-'}）</h4>
+        <table class="ctab ev"><tr><th>进度</th><th>峰值加速</th><th>加速距离</th><th>起始速</th><th>结束速</th></tr>
+        ${thr.map(e => `<tr><td>${e.progress}%</td><td class="pos">${e.peakG}G</td><td>${e.dist_m}m</td><td>${e.startSpeed}</td><td>${e.endSpeed}</td></tr>`).join('') || '<tr><td colspan="5" class="satnote">无</td></tr>'}</table></div>
+    </div>`;
+  }
+
   // 建议
   const worst = a.worstZones[0];
   const worstSec = a.sectors.length ? a.sectors.reduce((m, x) => x.std_s > m.std_s ? x : m) : null;
   const ic = [...a.corners].sort((x, y) => y.speed_loss - x.speed_loss).slice(0, 2);
   const minGc = a.corners.length ? a.corners.reduce((m, x) => x.max_g < m.max_g ? x : m) : null;
   const maxG = a.corners.length ? Math.max(...a.corners.map(c => c.max_g)) : 0;
+  const bc = a.brakeConsistency[0];
+  const bcLap = sel ? sel.metrics : null;
   let adv = '';
   if (a.best) {
     adv = `<ul>
@@ -315,8 +448,12 @@ function renderDetail(s) {
       <li><b>最大波动区：</b>${worst ? `赛道进度 ${worst.progress_pct}% 附近速度每圈差 ${worst.std} km/h，走线/刹车点不固定，是最容易捡时间的地方。` : '数据较一致。'}</li>
       <li><b>丢速度最多的弯：</b>${ic.map(c => `C${c.id} 损失 ${c.speed_loss} km/h（入 ${c.entry_speed}→弯心 ${c.apex_speed}）`).join('；')}。出弯速度（${ic.map(c => c.exit_speed).join(' / ')}）还有空间，练"晚刹+弯心保速+早给油"。</li>
       <li><b>抓地利用：</b>最高横向G 达 ${maxG.toFixed(2)}；横向G 最低的 C${minGc ? minGc.id : '-'} 仅 ${minGc ? minGc.max_g.toFixed(2) : '-'}G，可稍晚刹车多带速。</li>
+      <li><b>刹车点一致性：</b>${bc ? `进度 ${bc.progress}% 的刹车点每圈位置差 ±${bc.std.toFixed(1)}%，是最该固定下来的刹车点；固定后单圈会更稳。` : '已较一致。'}</li>
+      <li><b>油门/全油门：</b>当前圈全油门占比 ${bcLap ? bcLap.flatout_pct : '-'}%、峰值加速 ${bcLap ? bcLap.peakThrottleG : '-'}G、G-Sum 峰值 ${bcLap ? bcLap.gsumPeak : '-'}（抓地利用上限参考）。出弯早给油、平滑加压能把 G-Sum 推满。</li>
     </ul>`;
   }
+
+  const lapOpts = a.full.map(l => `<option value="${l.index}" ${l.index === selIdx ? 'selected' : ''}>#${l.index} · ${l.time_s.toFixed(2)}s</option>`).join('');
 
   document.getElementById('detail').innerHTML = `
     <div class="dhead"><h2>${esc(s.name)}</h2><span class="dt">${esc(s.date)}</span></div>
@@ -326,15 +463,24 @@ function renderDetail(s) {
       <div class="stat"><div class="v" style="color:${a.gradeCol}">${a.grade}</div><div class="k">一致性</div></div>
       <div class="stat"><div class="v">${a.vmax.toFixed(0)}</div><div class="k">极速 km/h</div></div>
       <div class="stat"><div class="v">${maxG.toFixed(2)}</div><div class="k">最高G</div></div>
-      <div class="stat"><div class="v">${a.full.length}</div><div class="k">有效圈</div></div>
+      <div class="stat"><div class="v">${sel && sel.metrics ? sel.metrics.flatout_pct + '%' : '-'}</div><div class="k">全油门占比</div></div>
+      <div class="stat"><div class="v">${sel && sel.metrics ? sel.metrics.gsumPeak : '-'}</div><div class="k">G-Sum峰值</div></div>
+      <div class="stat"><div class="v">${bcLap ? bcLap.peakBrakeG + 'G' : '-'}</div><div class="k">峰值减速度</div></div>
     </div>
     <div class="secblock"><h3>圈速</h3><div class="laplist">${lapHtml}</div></div>
     <div class="secblock"><h3>最快圈 速度 / 横向G</h3><canvas id="chart" class="chart" width="660" height="280"></canvas>
       <div class="satnote">横轴=赛道进度0→100%；蓝=速度km/h，红=横向G；虚线=弯角位置</div></div>
+    <div class="secblock"><h3>纵向G（刹车/油门曲线）</h3><canvas id="chartLong" class="chart" width="660" height="240"></canvas>
+      <div class="satnote">红=刹车（纵向G为负），绿=油门（纵向G为正）；由速度差分推导，是卡丁车无刹车传感器时读刹车/油门点的标准做法</div></div>
+    <div class="secblock"><h3>每圈汇总</h3>${lapTab}</div>
+    <div class="secblock"><h3>刹车 / 油门事件 <select id="lapSel" class="lapsel">${lapOpts}</select></h3>${evHtml || '<div class="satnote">无刹车/油门事件。</div>'}</div>
     <div class="secblock"><h3>弯角明细（最快圈）</h3>${cornerHtml}</div>
     <div class="secblock"><div class="adv"><h3 style="color:var(--amber);border-left-color:var(--amber);margin-top:0">提升点</h3>${adv}</div></div>
     <div class="satnote">注：本 .vbo 的 GPS 为偏移坐标，赛道<b>形状</b>准确。左下角"对齐真实场地"可把赛道平移到真实卫星位置。</div>`;
   drawChart(document.getElementById('chart'), a.speedProfile, a.gProfile, a.corners);
+  drawLongChart(document.getElementById('chartLong'), a.longGProfile, a.corners);
+  const selEl = document.getElementById('lapSel');
+  if (selEl) selEl.onchange = () => { selLap = parseInt(selEl.value, 10); renderDetail(s); };
 }
 function drawChart(cv, sp, gp, corners) {
   if (!cv || !sp.length) return;
@@ -364,11 +510,45 @@ function drawChart(cv, sp, gp, corners) {
   ctx.fillStyle = '#8b98a5'; ctx.textAlign = 'center';
   ctx.fillText('赛道进度 →', W / 2, H - 6);
 }
+function drawLongChart(cv, dp, corners) {
+  if (!cv || !dp.length) return;
+  const W = cv.width, H = cv.height, padL = 38, padR = 38, padT = 14, padB = 22;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  const gmax = Math.max(0.2, Math.max(...dp.map(p => Math.abs(p[1]))) * 1.1);
+  const sx = p => padL + p / 100 * (W - padL - padR);
+  const sy = g => H - padB - (g + gmax) / (2 * gmax) * (H - padT - padB);
+  ctx.strokeStyle = '#7a6a3a'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+  for (const c of corners) { ctx.beginPath(); ctx.moveTo(sx(c.progress_pct), padT); ctx.lineTo(sx(c.progress_pct), H - padB); ctx.stroke(); }
+  ctx.setLineDash([]);
+  ctx.strokeStyle = '#5a6675'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(padL, sy(0)); ctx.lineTo(W - padR, sy(0)); ctx.stroke();
+  for (let i = 1; i < dp.length; i++) {
+    const x0 = sx(dp[i - 1][0]), x1 = sx(dp[i][0]), y0 = sy(dp[i - 1][1]), y1 = sy(dp[i][1]);
+    ctx.fillStyle = dp[i][1] < 0 ? 'rgba(225,6,0,.5)' : 'rgba(46,204,113,.5)';
+    ctx.beginPath(); ctx.moveTo(x0, sy(0)); ctx.lineTo(x0, y0); ctx.lineTo(x1, y1); ctx.lineTo(x1, sy(0)); ctx.closePath(); ctx.fill();
+  }
+  ctx.strokeStyle = '#3b9eff'; ctx.lineWidth = 1.4; ctx.beginPath();
+  dp.forEach((p, i) => { const x = sx(p[0]), y = sy(p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
+  ctx.fillStyle = '#e10600'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+  ctx.fillText('-' + gmax.toFixed(1) + 'G', padL - 4, sy(-gmax) + 3);
+  ctx.fillText('0', padL - 4, sy(0) + 3);
+  ctx.fillStyle = '#2ecc71'; ctx.textAlign = 'left';
+  ctx.fillText('+' + gmax.toFixed(1) + 'G', W - padR + 4, sy(gmax) + 3);
+  ctx.fillStyle = '#8b98a5'; ctx.textAlign = 'center';
+  ctx.fillText('赛道进度 →', W / 2, H - 6);
+}
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 
 /* ---------- 对齐 ---------- */
+function centroidRaw(s) {
+  let la = 0, lo = 0;
+  for (let i = 0; i < s.points.length; i++) { la += s.points[i].lat; lo += s.points[i].lon; }
+  return { lat: la / s.points.length, lon: lo / s.points.length };
+}
 function applyAlign(s, lat, lon) {
-  const cen = centroidPlot(s);
+  // 必须用「未偏移」的原始坐标中心来算 offset，否则第二次对齐会把已偏移的中心再当基准，导致越偏越回。
+  const cen = centroidRaw(s);
   s.offset.dLat = lat - cen.lat; s.offset.dLon = lon - cen.lon;
   drawTrack(s);
 }
