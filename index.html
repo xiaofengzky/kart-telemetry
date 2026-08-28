@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Kart Telemetry · 卡丁车遥测台</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<link rel="stylesheet" href="style.css?v=7">
+<link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
 <header class="topbar">
@@ -18,7 +18,6 @@
 </header>
 
 <div class="layout">
-  <div class="scrim" id="scrim"></div>
   <!-- 左侧会话列表 -->
   <aside class="sidebar">
     <div class="sidehead">我的跑圈 <span id="sessCount" class="badge">0</span></div>
@@ -31,6 +30,7 @@
 
   <!-- 主分析区 + 右上角小地图 -->
   <main class="mainwrap">
+    <div class="scrim" id="scrim"></div>
     <section class="panel">
       <div id="detail">
         <div class="placeholder">← 选择左侧一场跑圈<br>查看圈速、速度曲线、弯角与刹车油门分析</div>
@@ -70,6 +70,6 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

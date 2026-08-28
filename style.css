@@ -44,6 +44,10 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
 
 .mainwrap{position:relative;height:100%;background:var(--bg2);overflow:hidden}
 .panel{height:100%;overflow-y:auto}
+/* 遮罩：fixed 定位，不参与 grid；手机抽屉打开时显示 */
+.scrim{position:fixed;inset:0;z-index:850;background:rgba(0,0,0,.5);
+  opacity:0;pointer-events:none;transition:opacity .22s}
+.layout.nav-open .scrim{opacity:1;pointer-events:auto}
 /* 右上角小地图浮窗 */
 .mapmod{position:absolute;top:14px;right:14px;width:320px;height:236px;z-index:600;
   background:var(--bg2);border:1px solid var(--line);border-radius:11px;overflow:hidden;
@@ -180,9 +184,6 @@ canvas.chart{width:100%;background:var(--bg);border:1px solid var(--line);border
     transform:translateX(-100%);transition:transform .22s ease;
     box-shadow:0 0 30px rgba(0,0,0,.6)}
   .layout.nav-open .sidebar{transform:translateX(0)}
-  .scrim{position:absolute;inset:0;background:rgba(0,0,0,.5);z-index:850;
-    opacity:0;pointer-events:none;transition:opacity .22s}
-  .layout.nav-open .scrim{opacity:1;pointer-events:auto}
 
   .sidehead{padding:14px}
   .dropzone{margin:10px;padding:14px}
