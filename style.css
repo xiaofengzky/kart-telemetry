@@ -6,9 +6,12 @@
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
   font-family:-apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,Roboto,sans-serif;
-  font-size:13px;overflow:hidden}
+  font-size:13px;overflow:hidden;-webkit-text-size-adjust:100%;overscroll-behavior:none}
 .topbar{height:52px;display:flex;align-items:center;gap:14px;padding:0 18px;
   background:linear-gradient(90deg,#0d1117,#161d27);border-bottom:1px solid var(--line)}
+.menubtn{display:none;background:var(--bg3);color:var(--txt);border:1px solid var(--line);
+  border-radius:7px;font-size:17px;line-height:1;padding:7px 11px;cursor:pointer}
+.menubtn:active{background:var(--line)}
 .brand{font-weight:800;font-size:17px;letter-spacing:1px}
 .brand .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--accent);margin-right:7px;vertical-align:middle}
 .brand .accent{color:var(--accent)}
@@ -114,6 +117,8 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
 .ctab.ev{font-size:11px}
 .ctab.ev td,.ctab.ev th{padding:3px 5px}
 .ctab tr.on{background:rgba(59,158,255,.16)}
+/* 横向滚动的表格容器（移动端宽表不溢出） */
+.tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .neg{color:#e10600;font-weight:700}
 .pos{color:#2ecc71;font-weight:700}
 .evwrap{display:flex;gap:14px;flex-wrap:wrap;margin-top:4px}
@@ -137,6 +142,109 @@ canvas.chart{width:100%;background:var(--bg);border:1px solid var(--line);border
 ::-webkit-scrollbar{width:9px;height:9px}
 ::-webkit-scrollbar-thumb{background:#2a3543;border-radius:5px}
 ::-webkit-scrollbar-track{background:transparent}
-@media(max-width:1100px){.layout{grid-template-columns:240px 1fr}
+
+/* ================= 中等屏：收窄 ================ */
+@media(max-width:1100px){
+  .layout{grid-template-columns:240px 1fr}
   .mapmod{width:260px;height:210px}
+  .summary,.secblock{margin-right:270px}
+}
+
+/* ================= 平板 / 竖屏 ================ */
+@media(max-width:820px){
+  .tagline{display:none}
+  .topbar{gap:10px;padding:0 12px}
+  .summary,.secblock{margin-right:0}
+  /* 地图浮窗缩小并靠右上，不遮挡内容 */
+  .mapmod{width:220px;height:180px;top:10px;right:10px}
+  .mapmod.expanded{width:calc(100vw - 20px);height:60vh;top:10px;right:10px;left:10px}
+  .statgrid{grid-template-columns:repeat(3,1fr)}
+  .evwrap{flex-direction:column;gap:16px}
+  .evcol{min-width:0}
+}
+
+/* ================= 手机端 ================ */
+@media(max-width:680px){
+  /* 顶栏：紧凑，定位按钮只留图标 */
+  .topbar{height:50px;gap:8px;padding:0 10px}
+  .menubtn{display:block}
+  .brand{font-size:15px;letter-spacing:.5px}
+  .brand .dot{width:7px;height:7px;margin-right:5px}
+  .locatebtn .btxt{display:none}
+  .locatebtn::after{content:'📍'}
+  .locatebtn,.dropbtn{padding:8px 11px;font-size:12px}
+
+  /* 侧栏变抽屉 */
+  .layout{grid-template-columns:1fr;position:relative}
+  .sidebar{position:absolute;top:0;bottom:0;left:0;width:min(84vw,300px);z-index:900;
+    transform:translateX(-100%);transition:transform .22s ease;
+    box-shadow:0 0 30px rgba(0,0,0,.6)}
+  .layout.nav-open .sidebar{transform:translateX(0)}
+  .scrim{position:absolute;inset:0;background:rgba(0,0,0,.5);z-index:850;
+    opacity:0;pointer-events:none;transition:opacity .22s}
+  .layout.nav-open .scrim{opacity:1;pointer-events:auto}
+
+  .sidehead{padding:14px}
+  .dropzone{margin:10px;padding:14px}
+  .sess{padding:13px 12px}              /* 更大的点击区 */
+  .sess .sstat{gap:10px;flex-wrap:wrap}
+
+  /* 地图：全宽条，手指友好 */
+  /* 地图：全宽条，手指友好（文档流内，随内容滚动） */
+  .mainwrap{overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .panel{height:auto;overflow:visible}
+  .mapmod{position:relative;top:auto;right:auto;width:auto;height:210px;z-index:1;
+    margin:10px 12px 0;border-radius:10px;box-shadow:none;border:1px solid var(--line)}
+  .mapmod.expanded{height:70vh;margin:10px 12px 0}
+  .mmhead{height:36px;padding:0 10px}
+  .mini{padding:8px 12px;font-size:12px}   /* 触摸目标 >=32px */
+  #map{inset:36px 0 0 0}
+  .mapbadge{left:8px;top:44px;font-size:10px;padding:4px 8px}
+  .mypos{left:8px;top:82px;max-width:calc(100% - 16px)}
+  .legend{right:8px;bottom:8px;padding:5px 8px}
+  .legend .grad{width:70px}
+  .alignbox{left:8px;right:8px;width:auto;bottom:8px}
+
+  /* 内容：单列、加内边距 */
+  .panel{padding:0}
+  .detail{padding:12px}
+  .statgrid{grid-template-columns:repeat(2,1fr);gap:7px}
+  .stat .v{font-size:15px}
+  .secblock{margin-bottom:14px}
+  .secblock h3{font-size:12px}
+  .dhead h2{font-size:15px}
+  .dhead{flex-direction:column;align-items:flex-start;gap:2px}
+
+  /* 表格横向滚动 */
+  .ctab{font-size:11px}
+  .ctab th,.ctab td{padding:6px 5px;white-space:nowrap}
+  .evcol{min-width:0}
+  .evwrap{gap:14px}
+  .evcol h4{font-size:12px}
+
+  /* 圈块 / 下拉：保证 >=44px 触摸目标 */
+  .chip{min-height:36px;padding:8px 14px;font-size:12.5px;
+    display:inline-flex;align-items:center;border-radius:18px}
+  .cmpchips{gap:8px}
+  .lapsel{min-height:36px;padding:7px 10px;font-size:13px}
+
+  /* 图表高度自适应 */
+  canvas.chart{height:auto;min-height:210px}
+  .placeholder{padding:40px 16px}
+}
+
+/* ================= 超窄屏 ================ */
+@media(max-width:400px){
+  .statgrid{grid-template-columns:repeat(2,1fr)}
+  .stat .v{font-size:14px}
+  .stat .k{font-size:9.5px}
+  .brand{font-size:14px}
+  .mapmod{height:190px}
+}
+
+/* 触摸设备：去掉 hover 残留态 */
+@media(hover:none){
+  .sess:hover{border-color:var(--line)}
+  .locatebtn:hover{border-color:var(--line);color:var(--txt)}
+  .chip:hover{opacity:1}
 }

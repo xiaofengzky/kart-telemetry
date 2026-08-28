@@ -5,18 +5,20 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Kart Telemetry · 卡丁车遥测台</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<link rel="stylesheet" href="style.css?v=6">
+<link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 <header class="topbar">
+  <button id="menuBtn" class="menubtn" aria-label="菜单">☰</button>
   <div class="brand"><span class="dot"></span> KART<span class="accent">TELEMETRY</span></div>
   <div class="tagline">拖入 .vbo 跑圈数据 · 圈速 / 弯角 / 刹车油门分析</div>
   <div class="grow"></div>
-  <button id="locateBtn" class="locatebtn" title="用浏览器定位显示你当前所在位置">📍 定位我</button>
+  <button id="locateBtn" class="locatebtn" title="用浏览器定位显示你当前所在位置"><span class="btxt">📍 定位我</span></button>
   <label class="dropbtn">+ 选择文件<input id="fileInput" type="file" accept=".vbo" multiple></label>
 </header>
 
 <div class="layout">
+  <div class="scrim" id="scrim"></div>
   <!-- 左侧会话列表 -->
   <aside class="sidebar">
     <div class="sidehead">我的跑圈 <span id="sessCount" class="badge">0</span></div>
@@ -68,6 +70,6 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="app.js?v=6"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

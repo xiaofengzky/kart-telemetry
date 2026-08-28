@@ -393,6 +393,7 @@ function renderSidebar() {
 function selectSession(id) {
   curId = id; const s = SESSIONS.find(x => x.id === id);
   selLap = null;
+  if (window.__closeNav) window.__closeNav();   // 手机端选完自动收起抽屉
   // 速度对比默认勾选最快圈 + 第二快圈
   const sorted = [...s.analysis.full].sort((x, y) => x.time_s - y.time_s);
   cmpLaps = new Set([sorted[0].index]);
@@ -424,13 +425,13 @@ function renderDetail(s) {
       <span class="lt">${l.time_s.toFixed(2)}s</span></div>`;
   }).join('');
 
-  let cornerHtml = a.corners.length ? `<table class="ctab"><tr><th>弯</th><th>进度</th><th>入弯</th><th>弯心</th><th>出弯</th><th>横向G</th><th>损失</th></tr>
-    ${a.corners.map(c => `<tr><td>${c.id}</td><td>${c.progress_pct}%</td><td>${c.entry_speed}</td><td class="b">${c.apex_speed}</td><td>${c.exit_speed}</td><td>${c.max_g}</td><td>${c.speed_loss}</td></tr>`).join('')}</table>`
+  let cornerHtml = a.corners.length ? `<div class="tscroll"><table class="ctab"><tr><th>弯</th><th>进度</th><th>入弯</th><th>弯心</th><th>出弯</th><th>横向G</th><th>损失</th></tr>
+    ${a.corners.map(c => `<tr><td>${c.id}</td><td>${c.progress_pct}%</td><td>${c.entry_speed}</td><td class="b">${c.apex_speed}</td><td>${c.exit_speed}</td><td>${c.max_g}</td><td>${c.speed_loss}</td></tr>`).join('')}</table></div>`
     : '<div class="satnote">未能识别明显弯角。</div>';
 
   // 每圈汇总表
-  let lapTab = a.full.length ? `<table class="ctab ev"><tr><th>圈</th><th>时间</th><th>刹车点</th><th>峰值减速度</th><th>峰值加速</th><th>最低速</th><th>全油门</th><th>G-Sum</th></tr>
-    ${a.full.map(l => `<tr class="${l.index === selIdx ? 'on' : ''}"><td>${l.index}</td><td>${l.time_s.toFixed(2)}</td><td>${l.metrics.brakeCount}</td><td>${l.metrics.peakBrakeG}G</td><td>${l.metrics.peakThrottleG}G</td><td>${l.metrics.minSpeed}</td><td>${l.metrics.flatout_pct}%</td><td>${l.metrics.gsumPeak}</td></tr>`).join('')}</table>`
+  let lapTab = a.full.length ? `<div class="tscroll"><table class="ctab ev"><tr><th>圈</th><th>时间</th><th>刹车点</th><th>峰值减速度</th><th>峰值加速</th><th>最低速</th><th>全油门</th><th>G-Sum</th></tr>
+    ${a.full.map(l => `<tr class="${l.index === selIdx ? 'on' : ''}"><td>${l.index}</td><td>${l.time_s.toFixed(2)}</td><td>${l.metrics.brakeCount}</td><td>${l.metrics.peakBrakeG}G</td><td>${l.metrics.peakThrottleG}G</td><td>${l.metrics.minSpeed}</td><td>${l.metrics.flatout_pct}%</td><td>${l.metrics.gsumPeak}</td></tr>`).join('')}</table></div>`
     : '';
 
   // 选中圈刹车/油门事件表
@@ -440,11 +441,11 @@ function renderDetail(s) {
   if (brk.length || thr.length) {
     evHtml = `<div class="evwrap">
       <div class="evcol"><h4>🛑 刹车点（#${sel ? sel.index : '-'}）</h4>
-        <table class="ctab ev"><tr><th>进度</th><th>峰值减速度</th><th>刹车距离</th><th>入弯速</th><th>刹车后最低速</th></tr>
-        ${brk.map(e => `<tr><td>${e.progress}%</td><td class="neg">${e.peakG}G</td><td>${e.dist_m}m</td><td>${e.entrySpeed}</td><td>${e.minSpeed}</td></tr>`).join('') || '<tr><td colspan="5" class="satnote">无</td></tr>'}</table></div>
+        <div class="tscroll"><table class="ctab ev"><tr><th>进度</th><th>峰值减速度</th><th>刹车距离</th><th>入弯速</th><th>刹车后最低速</th></tr>
+        ${brk.map(e => `<tr><td>${e.progress}%</td><td class="neg">${e.peakG}G</td><td>${e.dist_m}m</td><td>${e.entrySpeed}</td><td>${e.minSpeed}</td></tr>`).join('') || '<tr><td colspan="5" class="satnote">无</td></tr>'}</table></div></div>
       <div class="evcol"><h4>🟢 油门点（#${sel ? sel.index : '-'}）</h4>
-        <table class="ctab ev"><tr><th>进度</th><th>峰值加速</th><th>加速距离</th><th>起始速</th><th>结束速</th></tr>
-        ${thr.map(e => `<tr><td>${e.progress}%</td><td class="pos">${e.peakG}G</td><td>${e.dist_m}m</td><td>${e.startSpeed}</td><td>${e.endSpeed}</td></tr>`).join('') || '<tr><td colspan="5" class="satnote">无</td></tr>'}</table></div>
+        <div class="tscroll"><table class="ctab ev"><tr><th>进度</th><th>峰值加速</th><th>加速距离</th><th>起始速</th><th>结束速</th></tr>
+        ${thr.map(e => `<tr><td>${e.progress}%</td><td class="pos">${e.peakG}G</td><td>${e.dist_m}m</td><td>${e.startSpeed}</td><td>${e.endSpeed}</td></tr>`).join('') || '<tr><td colspan="5" class="satnote">无</td></tr>'}</table></div></div>
     </div>`;
   }
 
@@ -723,6 +724,26 @@ function setupIO() {
     document.getElementById('alignNote').style.display = 'none';
   };
   document.getElementById('locateBtn').onclick = locateMe;
+  // 手机端抽屉：汉堡按钮 / 遮罩 / 选中会话后自动收起
+  const layout = document.querySelector('.layout');
+  const closeNav = () => layout && layout.classList.remove('nav-open');
+  document.getElementById('menuBtn').onclick = () => layout && layout.classList.toggle('nav-open');
+  document.getElementById('scrim').onclick = closeNav;
+  // ESC 关闭抽屉
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeNav(); });
+  // 抽屉内向左滑动关闭
+  const sidebar = document.querySelector('.sidebar');
+  let tx0 = null, ty0 = null;
+  sidebar.addEventListener('touchstart', e => { tx0 = e.touches[0].clientX; ty0 = e.touches[0].clientY; }, { passive: true });
+  sidebar.addEventListener('touchend', e => {
+    if (tx0 == null) return;
+    const dx = e.changedTouches[0].clientX - tx0, dy = e.changedTouches[0].clientY - ty0;
+    if (dx < -50 && Math.abs(dy) < 40) closeNav();   // 左滑且非竖向滚动
+    tx0 = ty0 = null;
+  }, { passive: true });
+  // 视口变宽时（转横屏）自动收起，避免抽屉残留
+  window.addEventListener('resize', () => { if (window.innerWidth > 680) closeNav(); });
+  window.__closeNav = closeNav;
   // 右上角地图浮窗：放大/收起 + 对齐面板
   const mapMod = document.getElementById('mapModule');
   document.getElementById('mmExpand').onclick = () => {
