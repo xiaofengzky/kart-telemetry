@@ -323,11 +323,12 @@ function speedColor(t) {
 
 /* ---------- 地图 ---------- */
 function initMap() {
-  map = L.map('map', { zoomControl: true, attributionControl: true }).setView([14.9, 8.2], 15);
+  map = L.map('map', { zoomControl: false, attributionControl: true }).setView([14.9, 8.2], 15);
   satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Esri' });
   darkLayer = L.tileLayer('https://cartodb-basemaps-a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', { maxZoom: 19, subdomains: 'abcd', attribution: 'CARTO' });
   satLayer.addTo(map);
-  L.control.layers({ '卫星': satLayer, '暗色': darkLayer }, null, { position: 'topright' }).addTo(map);
+  L.control.zoom({ position: 'bottomleft' }).addTo(map);
+  L.control.layers({ '卫星': satLayer, '暗色': darkLayer }, null, { position: 'bottomleft' }).addTo(map);
   trackLayer = L.layerGroup().addTo(map);
   setTimeout(() => map && map.invalidateSize(), 200);
   map.on('click', e => {
@@ -456,16 +457,18 @@ function renderDetail(s) {
   const lapOpts = a.full.map(l => `<option value="${l.index}" ${l.index === selIdx ? 'selected' : ''}>#${l.index} · ${l.time_s.toFixed(2)}s</option>`).join('');
 
   document.getElementById('detail').innerHTML = `
-    <div class="dhead"><h2>${esc(s.name)}</h2><span class="dt">${esc(s.date)}</span></div>
-    <div class="statgrid">
-      <div class="stat"><div class="v">${a.best_time != null ? a.best_time.toFixed(2) + 's' : '-'}</div><div class="k">最快圈</div></div>
-      <div class="stat"><div class="v">${a.core_avg.toFixed(2) + 's'}</div><div class="k">核心均速</div></div>
-      <div class="stat"><div class="v" style="color:${a.gradeCol}">${a.grade}</div><div class="k">一致性</div></div>
-      <div class="stat"><div class="v">${a.vmax.toFixed(0)}</div><div class="k">极速 km/h</div></div>
-      <div class="stat"><div class="v">${maxG.toFixed(2)}</div><div class="k">最高G</div></div>
-      <div class="stat"><div class="v">${sel && sel.metrics ? sel.metrics.flatout_pct + '%' : '-'}</div><div class="k">全油门占比</div></div>
-      <div class="stat"><div class="v">${sel && sel.metrics ? sel.metrics.gsumPeak : '-'}</div><div class="k">G-Sum峰值</div></div>
-      <div class="stat"><div class="v">${bcLap ? bcLap.peakBrakeG + 'G' : '-'}</div><div class="k">峰值减速度</div></div>
+    <div class="summary">
+      <div class="dhead"><h2>${esc(s.name)}</h2><span class="dt">${esc(s.date)}</span></div>
+      <div class="statgrid">
+        <div class="stat"><div class="v">${a.best_time != null ? a.best_time.toFixed(2) + 's' : '-'}</div><div class="k">最快圈</div></div>
+        <div class="stat"><div class="v">${a.core_avg.toFixed(2) + 's'}</div><div class="k">核心均速</div></div>
+        <div class="stat"><div class="v" style="color:${a.gradeCol}">${a.grade}</div><div class="k">一致性</div></div>
+        <div class="stat"><div class="v">${a.vmax.toFixed(0)}</div><div class="k">极速 km/h</div></div>
+        <div class="stat"><div class="v">${maxG.toFixed(2)}</div><div class="k">最高G</div></div>
+        <div class="stat"><div class="v">${sel && sel.metrics ? sel.metrics.flatout_pct + '%' : '-'}</div><div class="k">全油门占比</div></div>
+        <div class="stat"><div class="v">${sel && sel.metrics ? sel.metrics.gsumPeak : '-'}</div><div class="k">G-Sum峰值</div></div>
+        <div class="stat"><div class="v">${bcLap ? bcLap.peakBrakeG + 'G' : '-'}</div><div class="k">峰值减速度</div></div>
+      </div>
     </div>
     <div class="secblock"><h3>圈速</h3><div class="laplist">${lapHtml}</div></div>
     <div class="secblock"><h3>最快圈 速度 / 横向G</h3><canvas id="chart" class="chart" width="660" height="280"></canvas>
@@ -652,5 +655,14 @@ function setupIO() {
     document.getElementById('alignNote').style.display = 'none';
   };
   document.getElementById('locateBtn').onclick = locateMe;
+  // 右上角地图浮窗：放大/收起 + 对齐面板
+  const mapMod = document.getElementById('mapModule');
+  document.getElementById('mmExpand').onclick = () => {
+    mapMod.classList.toggle('expanded');
+    setTimeout(() => map && map.invalidateSize(), 60);
+  };
+  document.getElementById('mmAlign').onclick = () => {
+    document.getElementById('alignBox').classList.toggle('show');
+  };
 }
 window.addEventListener('DOMContentLoaded', () => { initMap(); setupIO(); });
