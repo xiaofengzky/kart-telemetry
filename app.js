@@ -3,7 +3,7 @@
 
 const SESSIONS = [];      // {id,name,date,points,offset,analysis}
 let curId = null;
-let map, trackLayer, satLayer, darkLayer, picking = false;
+let map, trackLayer, satLayer, darkLayer, esriTopo, esriRelief, picking = false;
 let selLap = null;          // 刹车/油门事件表当前选中的圈
 let myMarker = null;          // 当前位置标记
 let cmpLaps = new Set();    // 速度对比图当前勾选的圈
@@ -13,15 +13,16 @@ const cmpColor = i => CMP_COLORS[(i - 1) % CMP_COLORS.length];
 const RAD = Math.PI / 180;
 const angDiff = (a, b) => { let d = a - b; while (d > 180) d -= 360; while (d < -180) d += 360; return d; };
 
-/* ---------- 解析 ---------- */
+/* ---------- 解析 ----------
+   VBO 官方格式（Racelogic）：经纬度存的是【十进制分钟】，不是 NMEA 的 ddmm！
+     latitude  = MMMM.MMMMMMMM  (+ve = 北纬)
+     longitude = MMMMM.MMMMMMMM (+ve = 西经)  <-- 注意：正数表示西经，与我们习惯相反
+   所以：纬度 = 值/60；经度 = -值/60（转成"东经为正"的通用经度）
+   之前误按 ddmm 解析，导致坐标被算到 14.9N/-68.8E（委内瑞拉），这就是"位置偏移"的真凶。 */
 function parseCoord(c, isLat) {
-  let sign = 1;
-  if (c[0] === '-') { sign = -1; c = c.slice(1); }
-  c = c.replace(/\+/g, '');
-  let deg, min;
-  if (isLat) { deg = parseFloat(c.slice(0, 2)); min = parseFloat(c.slice(2)); }
-  else { deg = parseFloat(c.slice(0, 3)); min = parseFloat(c.slice(3)); }
-  return sign * (deg + min / 60);
+  const v = parseFloat(c.replace(/\+/g, ''));
+  if (!isFinite(v)) return 0;
+  return isLat ? (v / 60) : (-v / 60);
 }
 function timeToSec(t) {
   const h = parseInt(t.slice(0, 2), 10), m = parseInt(t.slice(2, 4), 10), s = parseFloat(t.slice(4));
@@ -326,12 +327,18 @@ function speedColor(t) {
 
 /* ---------- 地图 ---------- */
 function initMap() {
-  map = L.map('map', { zoomControl: false, attributionControl: true }).setView([14.9, 8.2], 15);
+  map = L.map('map', { zoomControl: false, attributionControl: true }).setView([30.55, 114.2], 15);
+  // 全部免 API key 的公开瓦片源
   satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Esri' });
   darkLayer = L.tileLayer('https://cartodb-basemaps-a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', { maxZoom: 19, subdomains: 'abcd', attribution: 'CARTO' });
+  esriTopo = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Esri' });
+  esriRelief = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Esri' });
+  // 注：Google/OSM/OpenTopoMap 瓦片在部分网络环境不可达，故只保留实测可用的源
   satLayer.addTo(map);
   L.control.zoom({ position: 'bottomleft' }).addTo(map);
-  L.control.layers({ '卫星': satLayer, '暗色': darkLayer }, null, { position: 'bottomleft' }).addTo(map);
+  L.control.layers({
+    'Esri 卫星': satLayer, 'Esri 地形': esriTopo, 'Esri 晕渲': esriRelief, '暗色': darkLayer
+  }, null, { position: 'bottomleft' }).addTo(map);
   trackLayer = L.layerGroup().addTo(map);
   setTimeout(() => map && map.invalidateSize(), 200);
   map.on('click', e => {
@@ -491,7 +498,7 @@ function renderDetail(s) {
     <div class="secblock"><h3>刹车 / 油门事件 <select id="lapSel" class="lapsel">${lapOpts}</select></h3>${evHtml || '<div class="satnote">无刹车/油门事件。</div>'}</div>
     <div class="secblock"><h3>弯角明细（最快圈）</h3>${cornerHtml}</div>
     <div class="secblock"><div class="adv"><h3 style="color:var(--amber);border-left-color:var(--amber);margin-top:0">提升点</h3>${adv}</div></div>
-    <div class="satnote">注：本 .vbo 的 GPS 为偏移坐标，赛道<b>形状</b>准确。左下角"对齐真实场地"可把赛道平移到真实卫星位置。</div>`;
+    <div class="satnote">注：VBO 经纬度按官方格式（十进制分钟，经度正数为西经）解析，赛道已落在<b>真实场地位置</b>。若仍有几米误差属 GPS 正常漂移，可用地图「对齐」微调。</div>`;
   drawChart(document.getElementById('chart'), a.speedProfile, a.gProfile, a.corners);
   drawLongChart(document.getElementById('chartLong'), a.longGProfile, a.corners);
   drawCompare(s);
@@ -658,7 +665,7 @@ function showMyPos(lat, lon, acc) {
   if (s) {
     const c = centroidPlot(s);
     const d = haversine(lat, lon, c.lat, c.lon);
-    distTxt = '<div class="mdist">距当前赛道中心约 <b>' + d.toFixed(1) + ' km</b><br>可用左下「对齐真实场地」校正 GPS 偏移</div>';
+    distTxt = '<div class="mdist">距当前赛道中心约 <b>' + d.toFixed(1) + ' km</b></div>';
   }
   setMyPosMsg('<div class="mlat">📍 我的位置</div>' + lat.toFixed(5) + ', ' + lon.toFixed(5) + '<br>精度 ±' + acc.toFixed(0) + ' m' + distTxt);
 }
