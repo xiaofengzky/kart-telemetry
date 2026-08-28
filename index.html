@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kart Telemetry · 卡丁车遥测台</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="dot"></span> KART<span class="accent">TELEMETRY</span></div>
+  <div class="tagline">拖入 .vbo 跑圈数据 · 卫星赛道图 · 圈速 / 弯角分析</div>
+  <div class="grow"></div>
+  <button id="locateBtn" class="locatebtn" title="用浏览器定位显示你当前所在位置">📍 定位我</button>
+  <label class="dropbtn">+ 选择文件<input id="fileInput" type="file" accept=".vbo" multiple></label>
+</header>
+
+<div class="layout">
+  <!-- 左侧会话列表 -->
+  <aside class="sidebar">
+    <div class="sidehead">我的跑圈 <span id="sessCount" class="badge">0</span></div>
+    <div id="dropZone" class="dropzone">
+      <div class="dzinner">把 .vbo 文件拖到这里</div>
+    </div>
+    <div id="sessList" class="sesslist"></div>
+    <div id="emptyHint" class="emptyhint">还没有数据。<br>拖入 Racebobo / VBOX 导出的 .vbo 文件即可。</div>
+  </aside>
+
+  <!-- 中间地图 -->
+  <main class="mapwrap">
+    <div id="map"></div>
+    <div class="mapbadge" id="mapBadge">卫星图 · 赛道形状已绘制</div>
+    <div class="mypos" id="myPos"></div>
+    <div class="legend">
+      <span>慢</span>
+      <div class="grad"></div>
+      <span>快</span>
+    </div>
+    <div class="alignbox" id="alignBox">
+      <div class="atitle">对齐真实场地</div>
+      <div class="arow"><label>纬度</label><input id="alignLat" type="number" step="0.0001" placeholder="场地中心纬度"></div>
+      <div class="arow"><label>经度</label><input id="alignLon" type="number" step="0.0001" placeholder="场地中心经度"></div>
+      <div class="abtns">
+        <button id="applyAlign" class="mini">应用</button>
+        <button id="pickAlign" class="mini ghost">在图上点选</button>
+        <button id="resetAlign" class="mini ghost">重置</button>
+      </div>
+      <div class="anote" id="alignNote"></div>
+    </div>
+  </main>
+
+  <!-- 右侧遥测 -->
+  <section class="panel">
+    <div id="detail">
+      <div class="placeholder">← 选择左侧一场跑圈<br>查看圈速、速度曲线与弯角</div>
+    </div>
+  </section>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
