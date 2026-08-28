@@ -9,7 +9,7 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
   font-size:13px;overflow:hidden;-webkit-text-size-adjust:100%;overscroll-behavior:none}
 .topbar{height:52px;display:flex;align-items:center;gap:14px;padding:0 18px;
   background:linear-gradient(90deg,#0d1117,#161d27);border-bottom:1px solid var(--line)}
-.menubtn{display:none;background:var(--bg3);color:var(--txt);border:1px solid var(--line);
+.menubtn{background:var(--bg3);color:var(--txt);border:1px solid var(--line);
   border-radius:7px;font-size:17px;line-height:1;padding:7px 11px;cursor:pointer}
 .menubtn:active{background:var(--line)}
 .brand{font-weight:800;font-size:17px;letter-spacing:1px}
@@ -24,8 +24,13 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
 .locatebtn:hover{border-color:var(--accent2);color:#fff}
 .locatebtn.busy{opacity:.6;cursor:wait}
 
-.layout{display:grid;grid-template-columns:280px 1fr;height:calc(100% - 52px)}
-.sidebar{background:var(--bg2);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+/* 布局：内容全宽；侧栏做成左上角抽屉，点 ☰ 展开（桌面/手机一致） */
+.layout{display:grid;grid-template-columns:1fr;height:calc(100% - 52px);position:relative}
+.sidebar{position:absolute;top:0;bottom:0;left:0;width:min(84vw,300px);z-index:900;
+  transform:translateX(-100%);transition:transform .22s ease;
+  box-shadow:0 0 30px rgba(0,0,0,.6);background:var(--bg2);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;overflow:hidden}
+.layout.nav-open .sidebar{transform:translateX(0)}
 .sidehead{padding:12px 14px;font-weight:700;font-size:13px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
 .badge{background:var(--bg3);color:var(--mut);border-radius:10px;padding:1px 8px;font-size:11px}
 .dropzone{margin:12px;border:1.5px dashed var(--line);border-radius:10px;padding:18px;text-align:center;color:var(--mut);transition:.15s}
@@ -41,6 +46,10 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
 .sess .sstat{display:flex;gap:12px;margin-top:8px;font-size:11px;color:var(--mut)}
 .sess .sstat b{color:var(--txt);font-size:13px}
 .sess .strack{position:absolute;top:11px;right:12px;font-size:10px;color:var(--mut)}
+.src{font-style:normal;font-size:9.5px;font-weight:700;border-radius:4px;padding:1px 5px;margin-left:2px;vertical-align:middle}
+.src.iracing{background:rgba(255,90,77,.18);color:#ff8a80;border:1px solid rgba(255,90,77,.4)}
+.src.vbo{background:rgba(34,211,238,.14);color:#67e8f9;border:1px solid rgba(34,211,238,.35)}
+.dhead h2 .src{font-size:11px;padding:2px 7px}
 
 .mainwrap{position:relative;height:100%;background:var(--bg2);overflow:hidden}
 .panel{height:100%;overflow-y:auto}
@@ -149,7 +158,6 @@ canvas.chart{width:100%;background:var(--bg);border:1px solid var(--line);border
 
 /* ================= 中等屏：收窄 ================ */
 @media(max-width:1100px){
-  .layout{grid-template-columns:240px 1fr}
   .mapmod{width:260px;height:210px}
   .summary,.secblock{margin-right:270px}
 }
@@ -171,19 +179,11 @@ canvas.chart{width:100%;background:var(--bg);border:1px solid var(--line);border
 @media(max-width:680px){
   /* 顶栏：紧凑，定位按钮只留图标 */
   .topbar{height:50px;gap:8px;padding:0 10px}
-  .menubtn{display:block}
   .brand{font-size:15px;letter-spacing:.5px}
   .brand .dot{width:7px;height:7px;margin-right:5px}
   .locatebtn .btxt{display:none}
   .locatebtn::after{content:'📍'}
   .locatebtn,.dropbtn{padding:8px 11px;font-size:12px}
-
-  /* 侧栏变抽屉 */
-  .layout{grid-template-columns:1fr;position:relative}
-  .sidebar{position:absolute;top:0;bottom:0;left:0;width:min(84vw,300px);z-index:900;
-    transform:translateX(-100%);transition:transform .22s ease;
-    box-shadow:0 0 30px rgba(0,0,0,.6)}
-  .layout.nav-open .sidebar{transform:translateX(0)}
 
   .sidehead{padding:14px}
   .dropzone{margin:10px;padding:14px}

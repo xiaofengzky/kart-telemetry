@@ -11,10 +11,10 @@
 <header class="topbar">
   <button id="menuBtn" class="menubtn" aria-label="菜单">☰</button>
   <div class="brand"><span class="dot"></span> KART<span class="accent">TELEMETRY</span></div>
-  <div class="tagline">拖入 .vbo 跑圈数据 · 圈速 / 弯角 / 刹车油门分析</div>
+  <div class="tagline">拖入 .vbo / iRacing .ibt 跑圈数据 · 圈速 / 弯角 / 刹车油门分析</div>
   <div class="grow"></div>
   <button id="locateBtn" class="locatebtn" title="用浏览器定位显示你当前所在位置"><span class="btxt">📍 定位我</span></button>
-  <label class="dropbtn">+ 选择文件<input id="fileInput" type="file" accept=".vbo" multiple></label>
+  <label class="dropbtn">+ 选择文件<input id="fileInput" type="file" accept=".vbo,.ibt" multiple></label>
 </header>
 
 <div class="layout">
@@ -22,10 +22,10 @@
   <aside class="sidebar">
     <div class="sidehead">我的跑圈 <span id="sessCount" class="badge">0</span></div>
     <div id="dropZone" class="dropzone">
-      <div class="dzinner">把 .vbo 文件拖到这里</div>
+      <div class="dzinner">把 .vbo / .ibt 文件拖到这里</div>
     </div>
     <div id="sessList" class="sesslist"></div>
-    <div id="emptyHint" class="emptyhint">还没有数据。<br>拖入 Racebobo / VBOX 导出的 .vbo 文件即可。</div>
+    <div id="emptyHint" class="emptyhint">还没有数据。<br>拖入 Racebobo / VBOX 的 .vbo，或 iRacing 的 .ibt 遥测文件即可。</div>
   </aside>
 
   <!-- 主分析区 + 右上角小地图 -->
@@ -33,7 +33,7 @@
     <div class="scrim" id="scrim"></div>
     <section class="panel">
       <div id="detail">
-        <div class="placeholder">← 选择左侧一场跑圈<br>查看圈速、速度曲线、弯角与刹车油门分析</div>
+        <div class="placeholder">☰ 点左上角菜单打开「我的跑圈」<br>选择一场数据查看圈速、速度曲线、弯角与刹车油门分析</div>
       </div>
     </section>
 

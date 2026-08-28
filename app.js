@@ -53,6 +53,102 @@ function parseVBO(text) {
   return { comments, points: pts };
 }
 
+/* ================= iRacing .ibt 遥测 =================
+   iRacing 在 选项→Misc→Save telemetry data to disk 开启后，每场结束在
+   「文档/iRacing/telemetry」生成 .ibt 文件。它比 Racebobo .vbo 多出真实的
+   Throttle/Brake/SteeringWheelAngle/Gear/RPM 通道，且经纬度是精确 WGS84。 */
+function ibtBytesToString(buf, start, len) {
+  let s = '';
+  for (let i = 0; i < len; i++) { const c = buf[start + i]; if (!c) break; s += String.fromCharCode(c); }
+  return s;
+}
+function ibtReadVal(dv, buf, off, type) {
+  switch (type) {
+    case 1: return buf[off];
+    case 2: return buf[off] !== 0;
+    case 3: return dv.getInt32(off);
+    case 4: return dv.getUint32(off);
+    case 5: return dv.getFloat32(off);
+    case 6: return dv.getFloat64(off);
+    default: return null;
+  }
+}
+/* 解析 .ibt → { sessionInfo(JSON字符串), vars, ticks } */
+function parseIBT(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let off = 0;
+  const magic = ibtBytesToString(buf, 0, 12); off = 12;
+  dv.getInt32(off); off += 4;                                   // headerLen
+  const sessionInfoLen = dv.getInt32(off); off += 4;
+  const sessionInfo = ibtBytesToString(buf, off, sessionInfoLen); off += sessionInfoLen;
+  const varHeaderOffset = dv.getInt32(off); off += 4;
+  const numVars = dv.getInt32(off); off += 4;
+  dv.getInt32(off); off += 4;                                   // dataBufferSize
+  const numDataBuffers = dv.getInt32(off); off += 4;
+  let p = varHeaderOffset;
+  const vars = [];
+  for (let i = 0; i < numVars; i++) {
+    const name = ibtBytesToString(buf, p, 32); p += 32;
+    ibtBytesToString(buf, p, 32); p += 32;
+    ibtBytesToString(buf, p, 32); p += 32;
+    const type = dv.getInt32(p); p += 4;
+    const voff = dv.getInt32(p); p += 4;
+    const len = dv.getInt32(p); p += 4;
+    p += 1;
+    vars.push({ name, type, offset: voff, length: len });
+  }
+  const tickSize = vars.length ? (vars[vars.length - 1].offset + vars[vars.length - 1].length) : 0;
+  let d = p, buffers = 0;
+  const ticks = [];
+  while (d + 4 <= buf.byteLength && buffers < numDataBuffers) {
+    const tickCount = dv.getInt32(d); d += 4;
+    if (tickCount < 0 || tickCount > 1e7) break;
+    for (let t = 0; t < tickCount; t++) {
+      if (d + tickSize > buf.byteLength) break;
+      const rec = {};
+      for (const v of vars) rec[v.name] = ibtReadVal(dv, buf, d + v.offset, v.type);
+      ticks.push(rec);
+      d += tickSize;
+    }
+    buffers++;
+  }
+  return { magic, sessionInfo, vars, ticks };
+}
+/* iRacing ticks → 与 .vbo 相同的 points（附带真实踏板/档位/转速通道） */
+function ibtTicksToPoints(ticks) {
+  const pts = [];
+  let prevLat = null, prevLon = null, prevHdg = null;
+  for (const tk of ticks) {
+    const lat = +tk.WorldSpaceLatDeg, lon = +tk.WorldSpaceLonDeg;
+    if (!isFinite(lat) || !isFinite(lon)) continue;
+    let hdg = null;
+    if (prevLat != null) {
+      // 精确坐标下用位置差分算航向（iRacing 的 Yaw 是相对赛道的，不能直接用）
+      const dLon = (lon - prevLon) * Math.cos(lat * RAD);
+      hdg = Math.atan2(dLon, lat - prevLat) / RAD;
+      if (hdg < 0) hdg += 360;
+    }
+    pts.push({
+      lat, lon,
+      vel: (+tk.Speed || 0) * 3.6,        // m/s → km/h
+      hdg: hdg != null ? hdg : (prevHdg != null ? prevHdg : 0),
+      h: null,
+      t: +tk.SessionTime || 0,
+      thr: +tk.Throttle || 0,             // 0-1
+      brk: +tk.Brake || 0,                // 0-1
+      gear: +tk.Gear || 0,
+      rpm: +tk.RPM || 0,
+      steer: +tk.SteeringWheelAngle || 0, // rad
+      latA: +tk.LatAccel || 0,            // m/s²
+      lonA: +tk.LonAccel || 0,            // m/s²
+      lap: +tk.Lap || 0,
+      lapPct: +tk.LapDistPct || 0
+    });
+    prevLat = lat; prevLon = lon; prevHdg = hdg != null ? hdg : prevHdg;
+  }
+  return pts;
+}
+
 /* ---------- 分析 ---------- */
 function project(points) {
   let mlat = 0, mlon = 0;
@@ -68,6 +164,72 @@ function project(points) {
    向下突刺=刹车点(起始)、深度=刹车力度、宽度=刹车距离；正向加速段=油门点(出弯)。
    用较高阈值并过滤/合并短抖动，只保留真正有意义的驾驶阶段。 */
 function lapEvents(points, cum, driveG, latg, a, b, dist, vmax) {
+  // iRacing：有真实 Throttle/Brake 通道，直接按踏板开度检测，不依赖 driveG 推导
+  if (points[a] && points[a].thr !== undefined) {
+    const thrB = 0.15, thrT = 0.15, minLen = 2.5, mergeGap = 10;
+    const phases = (key, thr) => {
+      const raw = []; let inc = false, st = 0;
+      for (let t = a; t <= b; t++) {
+        const on = points[t][key] > thr;
+        if (on && !inc) { inc = true; st = t; }
+        if (!on && inc) { raw.push([st, t - 1]); inc = false; }
+      }
+      if (inc) raw.push([st, b]);
+      const filt = raw.filter(([s, e]) => (cum[e] - cum[s]) >= minLen);
+      const merged = [];
+      for (const seg of filt) {
+        if (merged.length && (cum[seg[0]] - cum[merged[merged.length - 1][1]]) < mergeGap) merged[merged.length - 1] = [merged[merged.length - 1][0], seg[1]];
+        else merged.push(seg);
+      }
+      return merged;
+    };
+    const pkOf = (key, s, e) => { let pk = s; for (let k = s; k <= e; k++) if (points[k][key] > points[pk][key]) pk = k; return pk; };
+    const brakes = phases('brk', thrB).map(([s, e]) => {
+      const pk = pkOf('brk', s, e);
+      let lo = points[pk].vel, loi = pk;
+      for (let k = pk; k <= e; k++) if (points[k].vel < lo) { lo = points[k].vel; loi = k; }
+      return {
+        progress: Math.round(100 * (cum[s] - cum[a]) / dist * 10) / 10,
+        peakG: Math.round(points[pk].brk * 100),        // 0-100% 刹车开度
+        dist_m: Math.round((cum[e] - cum[s]) * 10) / 10,
+        entrySpeed: Math.round(points[s].vel * 10) / 10,
+        minSpeed: Math.round(lo * 10) / 10
+      };
+    });
+    const throttles = phases('thr', thrT).map(([s, e]) => {
+      const pk = pkOf('thr', s, e);
+      return {
+        progress: Math.round(100 * (cum[s] - cum[a]) / dist * 10) / 10,
+        peakG: Math.round(points[pk].thr * 100),        // 0-100% 油门开度
+        dist_m: Math.round((cum[e] - cum[s]) * 10) / 10,
+        startSpeed: Math.round(points[s].vel * 10) / 10,
+        endSpeed: Math.round(points[e].vel * 10) / 10
+      };
+    });
+    let peakBrake = 0, peakThrottle = 0, gsum = 0;
+    for (let t = a; t <= b; t++) {
+      peakBrake = Math.max(peakBrake, points[t].brk);
+      peakThrottle = Math.max(peakThrottle, points[t].thr);
+      gsum = Math.max(gsum, Math.hypot(driveG[t], latg[t]));
+    }
+    let fo = 0, tot = 0;
+    for (let t = a + 1; t <= b; t++) {
+      tot += cum[t] - cum[t - 1];
+      if (points[t].thr > 0.85 && points[t].vel > 0.85 * vmax) fo += cum[t] - cum[t - 1];
+    }
+    const minSpeed = Math.min(...points.slice(a, b + 1).map(p => p.vel));
+    return {
+      brakes, throttles,
+      metrics: {
+        brakeCount: brakes.length, throttleCount: throttles.length,
+        peakBrakeG: Math.round(peakBrake * 100),        // %
+        peakThrottleG: Math.round(peakThrottle * 100),  // %
+        gsumPeak: Math.round(gsum * 100) / 100,
+        flatout_pct: tot ? Math.round(fo / tot * 100) : 0,
+        minSpeed: Math.round(minSpeed * 10) / 10
+      }
+    };
+  }
   const thrB = 0.35, thrT = 0.28, minLen = 2.5, mergeGap = 10;
   // 用平滑后的 driveG 做阶段检测（抑制 25Hz 噪声），峰值仍用原始 driveG 保证准
   const sm = new Array(b - a + 1);
@@ -143,8 +305,16 @@ function analyze(points) {
     cum.push(cum[i - 1] + Math.hypot(xy[i].x - xy[i - 1].x, xy[i].y - xy[i - 1].y));
   }
   // 横向G + 纵向G（driveG=分离坡度后的净纵向G：刹车为负，油门为正）
+  const isIR = points[0] && points[0].latA !== undefined;
   const latg = new Array(n).fill(0), longa = new Array(n).fill(0), driveG = new Array(n).fill(0);
   for (let i = 1; i < n - 1; i++) {
+    if (isIR) {
+      // iRacing：直接用模拟器给出的真实加速度通道（m/s² → g）
+      latg[i] = (points[i].latA || 0) / 9.81;
+      driveG[i] = (points[i].lonA || 0) / 9.81;
+      longa[i] = driveG[i];
+      continue;
+    }
     const v = (points[i - 1].vel + points[i + 1].vel) / 2 / 3.6;
     const dh = angDiff(points[i + 1].hdg, points[i - 1].hdg);
     const dth = (points[i + 1].t - points[i - 1].t) || (2 / 25);
@@ -158,18 +328,26 @@ function analyze(points) {
     driveG[i] = dvdt - slope;
     longa[i] = dvdt;
   }
-  // 圈速：回到起点
-  const sx = xy[0].x, sy = xy[0].y;
-  const dstart = xy.map(p => Math.hypot(p.x - sx, p.y - sy));
-  const crossings = [0]; let lastProg = cum[0];
-  let i = 1;
-  while (i < n) {
-    if (dstart[i] < 18) {
-      let j = i, best = i, bd = dstart[i];
-      while (j < n && dstart[j] < 18) { if (dstart[j] < bd) { bd = dstart[j]; best = j; } j++; }
-      if (cum[best] - lastProg > 120) { crossings.push(best); lastProg = cum[best]; }
-      i = j;
-    } else i++;
+  // 圈速识别：iRacing 直接用 Lap 通道分圈；.vbo 用「回到起点坐标」分圈
+  const crossings = [0];
+  if (isIR) {
+    let lastLap = points[0].lap;
+    for (let i = 1; i < n; i++) {
+      if (points[i].lap !== lastLap) { crossings.push(i); lastLap = points[i].lap; }
+    }
+  } else {
+    const sx = xy[0].x, sy = xy[0].y;
+    const dstart = xy.map(p => Math.hypot(p.x - sx, p.y - sy));
+    let lastProg = cum[0];
+    let i = 1;
+    while (i < n) {
+      if (dstart[i] < 18) {
+        let j = i, best = i, bd = dstart[i];
+        while (j < n && dstart[j] < 18) { if (dstart[j] < bd) { bd = dstart[j]; best = j; } j++; }
+        if (cum[best] - lastProg > 120) { crossings.push(best); lastProg = cum[best]; }
+        i = j;
+      } else i++;
+    }
   }
   const laps = [];
   for (let k = 1; k < crossings.length; k++) {
@@ -235,7 +413,7 @@ function analyze(points) {
     }
   }
   // 最快圈速度/G 曲线（100点）
-  const sp = [], gp = [], dp = [];
+  const sp = [], gp = [], dp = [], pp = [];   // pp: iRacing 踏板曲线 [pct, throttle%, brake%]
   if (best) {
     const a = best.startIdx, b = best.endIdx, D = best.distance_m;
     for (let pct = 0; pct <= 100; pct++) {
@@ -244,6 +422,7 @@ function analyze(points) {
       sp.push([pct, Math.round(points[ti].vel * 10) / 10]);
       gp.push([pct, Math.round(Math.abs(latg[ti]) * 100) / 100]);
       dp.push([pct, Math.round(driveG[ti] * 100) / 100]);
+      if (isIR) pp.push([pct, Math.round(points[ti].thr * 100), Math.round(points[ti].brk * 100)]);
     }
   }
   // 分段 & 波动区
@@ -310,7 +489,8 @@ function analyze(points) {
     best_time: best ? Math.round(best.time_s * 100) / 100 : null,
     avg_lap: Math.round(avg * 100) / 100, core_avg: Math.round(coreAvg * 100) / 100,
     core_std: Math.round(coreStd * 100) / 100, grade, gradeCol,
-    corners, speedProfile: sp, gProfile: gp, longGProfile: dp, sectors, worstZones, brakeConsistency, xy, cum
+    corners, speedProfile: sp, gProfile: gp, longGProfile: dp, pedalProfile: pp, isIR,
+    sectors, worstZones, brakeConsistency, xy, cum
   };
 }
 
@@ -382,7 +562,7 @@ function renderSidebar() {
     const a = s.analysis;
     const el = document.createElement('div');
     el.className = 'sess' + (s.id === curId ? ' active' : '');
-    el.innerHTML = `<div class="sname">${esc(s.name)}<span class="strack">${a.full.length} 圈</span></div>
+    el.innerHTML = `<div class="sname">${esc(s.name)}<span class="strack">${a.full.length} 圈 · ${s.source === 'iracing' ? '<i class="src iracing">iRacing</i>' : '<i class="src vbo">VBOX</i>'}</span></div>
       <div class="sdate">${esc(s.date)}</div>
       <div class="sstat"><span>最快 <b>${a.best_time != null ? a.best_time.toFixed(2) : '-'}s</b></span>
       <span>极速 <b>${a.vmax.toFixed(0)}</b></span><span>最高G <b>${Math.max(0, ...a.corners.map(c => c.max_g)).toFixed(2)}</b></span></div>`;
@@ -394,9 +574,9 @@ function selectSession(id) {
   curId = id; const s = SESSIONS.find(x => x.id === id);
   selLap = null;
   if (window.__closeNav) window.__closeNav();   // 手机端选完自动收起抽屉
-  // 速度对比默认勾选最快圈 + 第二快圈
+  // 速度对比默认勾选最快圈 + 第二快圈（无完整圈时兜底为空）
   const sorted = [...s.analysis.full].sort((x, y) => x.time_s - y.time_s);
-  cmpLaps = new Set([sorted[0].index]);
+  cmpLaps = new Set(sorted.length ? [sorted[0].index] : []);
   if (sorted[1]) cmpLaps.add(sorted[1].index);
   renderSidebar(); drawTrack(s); renderDetail(s);
   // 对齐框
@@ -414,6 +594,12 @@ function centroidPlot(s) {
 }
 function renderDetail(s) {
   const a = s.analysis;
+  const isIR = !!(a.isIR);
+  // 单位适配：iRacing 用真实踏板开度(%)，VBO 用推导 G 值
+  const fmtPeak = (v, isBrake) => {
+    if (v == null) return '-';
+    return isIR ? v + '%' : (isBrake ? v + 'G' : v + 'G');
+  };
   const maxT = Math.max(...a.laps.map(l => l.time_s));
   const bestIdx = a.best ? a.best.index : -1;
   const selIdx = selLap != null ? selLap : (a.best ? a.best.index : (a.full[0] && a.full[0].index));
@@ -431,21 +617,23 @@ function renderDetail(s) {
 
   // 每圈汇总表
   let lapTab = a.full.length ? `<div class="tscroll"><table class="ctab ev"><tr><th>圈</th><th>时间</th><th>刹车点</th><th>峰值减速度</th><th>峰值加速</th><th>最低速</th><th>全油门</th><th>G-Sum</th></tr>
-    ${a.full.map(l => `<tr class="${l.index === selIdx ? 'on' : ''}"><td>${l.index}</td><td>${l.time_s.toFixed(2)}</td><td>${l.metrics.brakeCount}</td><td>${l.metrics.peakBrakeG}G</td><td>${l.metrics.peakThrottleG}G</td><td>${l.metrics.minSpeed}</td><td>${l.metrics.flatout_pct}%</td><td>${l.metrics.gsumPeak}</td></tr>`).join('')}</table></div>`
+    ${a.full.map(l => `<tr class="${l.index === selIdx ? 'on' : ''}"><td>${l.index}</td><td>${l.time_s.toFixed(2)}</td><td>${l.metrics.brakeCount}</td><td>${fmtPeak(l.metrics.peakBrakeG, true)}</td><td>${fmtPeak(l.metrics.peakThrottleG, false)}</td><td>${l.metrics.minSpeed}</td><td>${l.metrics.flatout_pct}%</td><td>${l.metrics.gsumPeak}</td></tr>`).join('')}</table></div>`
     : '';
 
   // 选中圈刹车/油门事件表
   const brk = (sel && sel.brakeEvents) ? sel.brakeEvents : [];
   const thr = (sel && sel.throttleEvents) ? sel.throttleEvents : [];
+  const brkHdr = isIR ? '最大刹车开度' : '峰值减速度';
+  const thrHdr = isIR ? '最大油门开度' : '峰值加速';
   let evHtml = '';
   if (brk.length || thr.length) {
     evHtml = `<div class="evwrap">
       <div class="evcol"><h4>🛑 刹车点（#${sel ? sel.index : '-'}）</h4>
-        <div class="tscroll"><table class="ctab ev"><tr><th>进度</th><th>峰值减速度</th><th>刹车距离</th><th>入弯速</th><th>刹车后最低速</th></tr>
-        ${brk.map(e => `<tr><td>${e.progress}%</td><td class="neg">${e.peakG}G</td><td>${e.dist_m}m</td><td>${e.entrySpeed}</td><td>${e.minSpeed}</td></tr>`).join('') || '<tr><td colspan="5" class="satnote">无</td></tr>'}</table></div></div>
+        <div class="tscroll"><table class="ctab ev"><tr><th>进度</th><th>${brkHdr}</th><th>刹车距离</th><th>入弯速</th><th>刹车后最低速</th></tr>
+        ${brk.map(e => `<tr><td>${e.progress}%</td><td class="neg">${isIR ? e.peakG + '%' : e.peakG + 'G'}</td><td>${e.dist_m}m</td><td>${e.entrySpeed}</td><td>${e.minSpeed}</td></tr>`).join('') || '<tr><td colspan="5" class="satnote">无</td></tr>'}</table></div></div>
       <div class="evcol"><h4>🟢 油门点（#${sel ? sel.index : '-'}）</h4>
-        <div class="tscroll"><table class="ctab ev"><tr><th>进度</th><th>峰值加速</th><th>加速距离</th><th>起始速</th><th>结束速</th></tr>
-        ${thr.map(e => `<tr><td>${e.progress}%</td><td class="pos">${e.peakG}G</td><td>${e.dist_m}m</td><td>${e.startSpeed}</td><td>${e.endSpeed}</td></tr>`).join('') || '<tr><td colspan="5" class="satnote">无</td></tr>'}</table></div></div>
+        <div class="tscroll"><table class="ctab ev"><tr><th>进度</th><th>${thrHdr}</th><th>加速距离</th><th>起始速</th><th>结束速</th></tr>
+        ${thr.map(e => `<tr><td>${e.progress}%</td><td class="pos">${isIR ? e.peakG + '%' : e.peakG + 'G'}</td><td>${e.dist_m}m</td><td>${e.startSpeed}</td><td>${e.endSpeed}</td></tr>`).join('') || '<tr><td colspan="5" class="satnote">无</td></tr>'}</table></div></div>
     </div>`;
   }
 
@@ -465,7 +653,7 @@ function renderDetail(s) {
       <li><b>丢速度最多的弯：</b>${ic.map(c => `C${c.id} 损失 ${c.speed_loss} km/h（入 ${c.entry_speed}→弯心 ${c.apex_speed}）`).join('；')}。出弯速度（${ic.map(c => c.exit_speed).join(' / ')}）还有空间，练"晚刹+弯心保速+早给油"。</li>
       <li><b>抓地利用：</b>最高横向G 达 ${maxG.toFixed(2)}；横向G 最低的 C${minGc ? minGc.id : '-'} 仅 ${minGc ? minGc.max_g.toFixed(2) : '-'}G，可稍晚刹车多带速。</li>
       <li><b>刹车点一致性：</b>${bc ? `进度 ${bc.progress}% 的刹车点每圈位置差 ±${bc.std.toFixed(1)}%，是最该固定下来的刹车点；固定后单圈会更稳。` : '已较一致。'}</li>
-      <li><b>油门/全油门：</b>当前圈全油门占比 ${bcLap ? bcLap.flatout_pct : '-'}%、峰值加速 ${bcLap ? bcLap.peakThrottleG : '-'}G、G-Sum 峰值 ${bcLap ? bcLap.gsumPeak : '-'}（抓地利用上限参考）。出弯早给油、平滑加压能把 G-Sum 推满。</li>
+      <li><b>油门/全油门：</b>当前圈全油门占比 ${bcLap ? bcLap.flatout_pct : '-'}%、峰值${isIR ? '油门开度' : '加速'} ${bcLap ? fmtPeak(bcLap.peakThrottleG, false) : '-'}、G-Sum 峰值 ${bcLap ? bcLap.gsumPeak : '-'}（抓地利用上限参考）。出弯早给油、平滑加压能把 G-Sum 推满。</li>
     </ul>`;
   }
 
@@ -473,7 +661,7 @@ function renderDetail(s) {
 
   document.getElementById('detail').innerHTML = `
     <div class="summary">
-      <div class="dhead"><h2>${esc(s.name)}</h2><span class="dt">${esc(s.date)}</span></div>
+      <div class="dhead"><h2>${esc(s.name)} <i class="src ${isIR ? 'iracing' : 'vbo'}">${isIR ? 'iRacing' : 'VBOX'}</i></h2><span class="dt">${esc(s.date)}</span></div>
       <div class="statgrid">
         <div class="stat"><div class="v">${a.best_time != null ? a.best_time.toFixed(2) + 's' : '-'}</div><div class="k">最快圈</div></div>
         <div class="stat"><div class="v">${a.core_avg.toFixed(2) + 's'}</div><div class="k">核心均速</div></div>
@@ -482,14 +670,17 @@ function renderDetail(s) {
         <div class="stat"><div class="v">${maxG.toFixed(2)}</div><div class="k">最高G</div></div>
         <div class="stat"><div class="v">${sel && sel.metrics ? sel.metrics.flatout_pct + '%' : '-'}</div><div class="k">全油门占比</div></div>
         <div class="stat"><div class="v">${sel && sel.metrics ? sel.metrics.gsumPeak : '-'}</div><div class="k">G-Sum峰值</div></div>
-        <div class="stat"><div class="v">${bcLap ? bcLap.peakBrakeG + 'G' : '-'}</div><div class="k">峰值减速度</div></div>
+        <div class="stat"><div class="v">${bcLap ? fmtPeak(bcLap.peakBrakeG, true) : '-'}</div><div class="k">峰值减速度</div></div>
       </div>
     </div>
     <div class="secblock"><h3>圈速</h3><div class="laplist">${lapHtml}</div></div>
     <div class="secblock"><h3>最快圈 速度 / 横向G</h3><canvas id="chart" class="chart" width="660" height="280"></canvas>
       <div class="satnote">横轴=赛道进度0→100%；蓝=速度km/h，红=横向G；虚线=弯角位置</div></div>
-    <div class="secblock"><h3>纵向G（刹车/油门曲线）</h3><canvas id="chartLong" class="chart" width="660" height="240"></canvas>
-      <div class="satnote">红=刹车（纵向G为负），绿=油门（纵向G为正）；由速度差分推导，是卡丁车无刹车传感器时读刹车/油门点的标准做法</div></div>
+    ${isIR
+      ? `<div class="secblock"><h3>油门 / 刹车开度（iRacing 真实传感器）</h3><canvas id="chartPedal" class="chart" width="660" height="240"></canvas>
+         <div class="satnote">绿=油门开度，红=刹车开度（0-100%），由 iRacing 遥测直接读取；虚线=弯角位置</div></div>`
+      : `<div class="secblock"><h3>纵向G（刹车/油门曲线）</h3><canvas id="chartLong" class="chart" width="660" height="240"></canvas>
+         <div class="satnote">红=刹车（纵向G为负），绿=油门（纵向G为正）；由速度差分推导，是卡丁车无刹车传感器时读刹车/油门点的标准做法</div></div>`}
     <div class="secblock"><h3>多圈速度叠加对比</h3>
       <div class="cmpchips" id="cmpChips">${a.full.map(l => `<button class="chip ${cmpLaps.has(l.index) ? 'on' : ''}" data-lap="${l.index}" style="--c:${cmpColor(l.index)}">#${l.index}</button>`).join('')}</div>
       <canvas id="chartCompare" class="chart" width="680" height="300"></canvas>
@@ -499,9 +690,12 @@ function renderDetail(s) {
     <div class="secblock"><h3>刹车 / 油门事件 <select id="lapSel" class="lapsel">${lapOpts}</select></h3>${evHtml || '<div class="satnote">无刹车/油门事件。</div>'}</div>
     <div class="secblock"><h3>弯角明细（最快圈）</h3>${cornerHtml}</div>
     <div class="secblock"><div class="adv"><h3 style="color:var(--amber);border-left-color:var(--amber);margin-top:0">提升点</h3>${adv}</div></div>
-    <div class="satnote">注：VBO 经纬度按官方格式（十进制分钟，经度正数为西经）解析，赛道已落在<b>真实场地位置</b>。若仍有几米误差属 GPS 正常漂移，可用地图「对齐」微调。</div>`;
+    <div class="satnote">${isIR
+      ? '注：iRacing .ibt 遥测坐标是模拟器输出的精确 WGS84，赛道直接落在真实场地；油门/刹车/档位/转速均为模拟器真实通道。'
+      : '注：VBO 经纬度按官方格式（十进制分钟，经度正数为西经）解析，赛道已落在<b>真实场地位置</b>。若仍有几米误差属 GPS 正常漂移，可用地图「对齐」微调。'}</div>`;
   drawChart(document.getElementById('chart'), a.speedProfile, a.gProfile, a.corners);
-  drawLongChart(document.getElementById('chartLong'), a.longGProfile, a.corners);
+  if (isIR) drawPedalChart(document.getElementById('chartPedal'), a.pedalProfile, a.corners);
+  else drawLongChart(document.getElementById('chartLong'), a.longGProfile, a.corners);
   drawCompare(s);
   const chips = document.getElementById('cmpChips');
   if (chips) chips.onclick = e => {
@@ -571,6 +765,39 @@ function drawLongChart(cv, dp, corners) {
   ctx.fillText('赛道进度 →', W / 2, H - 6);
 }
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+
+/* iRacing 油门/刹车开度图（真实传感器 0-100%） */
+function drawPedalChart(cv, pp, corners) {
+  if (!cv || !pp.length) return;
+  const W = cv.width, H = cv.height, padL = 38, padR = 38, padT = 14, padB = 22;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  const sx = p => padL + p / 100 * (W - padL - padR);
+  const sy = v => H - padB - v / 100 * (H - padT - padB);
+  ctx.strokeStyle = '#7a6a3a'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+  for (const c of corners) { ctx.beginPath(); ctx.moveTo(sx(c.progress_pct), padT); ctx.lineTo(sx(c.progress_pct), H - padB); ctx.stroke(); }
+  ctx.setLineDash([]);
+  // 油门填充（绿）
+  ctx.fillStyle = 'rgba(46,204,113,.28)';
+  ctx.beginPath(); ctx.moveTo(sx(pp[0][0]), sy(0));
+  pp.forEach(p => ctx.lineTo(sx(p[0]), sy(p[1])));
+  ctx.lineTo(sx(pp[pp.length - 1][0]), sy(0)); ctx.closePath(); ctx.fill();
+  // 刹车填充（红）
+  ctx.fillStyle = 'rgba(225,6,0,.28)';
+  ctx.beginPath(); ctx.moveTo(sx(pp[0][0]), sy(0));
+  pp.forEach(p => ctx.lineTo(sx(p[0]), sy(p[2])));
+  ctx.lineTo(sx(pp[pp.length - 1][0]), sy(0)); ctx.closePath(); ctx.fill();
+  // 线
+  ctx.strokeStyle = '#2ecc71'; ctx.lineWidth = 1.6; ctx.beginPath();
+  pp.forEach((p, i) => { const x = sx(p[0]), y = sy(p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
+  ctx.strokeStyle = '#e10600'; ctx.lineWidth = 1.6; ctx.beginPath();
+  pp.forEach((p, i) => { const x = sx(p[0]), y = sy(p[2]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
+  // 刻度
+  ctx.fillStyle = '#8b98a5'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+  for (let k = 0; k <= 4; k++) { const v = 100 * k / 4; ctx.fillText(v.toFixed(0) + '%', padL - 4, sy(v) + 3); }
+  ctx.textAlign = 'center';
+  ctx.fillText('赛道进度 →', W / 2, H - 6);
+}
 
 /* 单圈速度曲线：按赛道进度 0→100% 重采样（不同圈长也按位置对齐） */
 function lapSpeedProfile(s, lap) {
@@ -672,34 +899,67 @@ function showMyPos(lat, lon, acc) {
 }
 
 /* ---------- 加载文件 ---------- */
+/* 加载失败提示（非阻塞，显示在详情区） */
+function showLoadError(msg) {
+  const d = document.getElementById('detail');
+  if (d) d.innerHTML = `<div class="placeholder" style="color:var(--accent)">⚠ ${msg}</div>`;
+  console.error('[kart]', msg);
+}
+function loadIBT(file, onDone) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const r = parseIBT(new Uint8Array(e.target.result));
+      if (!r.ticks.length) { showLoadError('无法解析 .ibt（无数据）：' + file.name); return; }
+      const pts = ibtTicksToPoints(r.ticks);
+      if (pts.length < 50) { showLoadError('.ibt 有效数据点太少：' + file.name); return; }
+      // 从 session info 提取赛道名
+      let name = '';
+      try { name = (JSON.parse(r.sessionInfo).weekendInfo || {}).trackName || ''; } catch (e2) { }
+      if (!name) name = file.name.replace(/\.ibt$/i, '');
+      const date = 'iRacing ' + (new Date()).toLocaleDateString('zh-CN');
+      const s = { id: Date.now() + '_' + SESSIONS.length, name, date, points: pts, source: 'iracing',
+        offset: { dLat: 0, dLon: 0 }, analysis: analyze(pts) };
+      SESSIONS.push(s);
+      renderSidebar();
+      if (SESSIONS.length === 1) selectSession(s.id);
+      dbSave(s);   // 持久化
+      onDone && onDone(s);
+    } catch (err) { console.error(err); showLoadError('解析 .ibt 失败：' + file.name + '<br>' + (err && err.message)); }
+  };
+  reader.readAsArrayBuffer(file);
+}
 function loadFile(file) {
+  if (/\.ibt$/i.test(file.name)) { loadIBT(file); return; }
   const reader = new FileReader();
   reader.onload = e => {
     const parsed = parseVBO(e.target.result);
-    if (!parsed || !parsed.points.length) { alert('无法解析：' + file.name); return; }
+    if (!parsed || !parsed.points.length) { showLoadError('无法解析：' + file.name); return; }
     const name = (parsed.comments.track && parsed.comments.track !== 'carrot2') ? parsed.comments.track
       : (parsed.comments.track || file.name.replace(/\.vbo$/i, ''));
     const date = parsed.comments.beijing || ('UTC ' + parsed.points[0].t.toFixed(0));
     const id = Date.now() + '_' + SESSIONS.length;
-    const s = { id, name, date, points: parsed.points, offset: { dLat: 0, dLon: 0 }, analysis: analyze(parsed.points) };
+    const s = { id, name, date, points: parsed.points, source: 'vbo', offset: { dLat: 0, dLon: 0 }, analysis: analyze(parsed.points) };
     SESSIONS.push(s);
     renderSidebar();
     if (SESSIONS.length === 1) selectSession(id);
+    dbSave(s);   // 持久化
   };
   reader.readAsText(file);
 }
 function setupIO() {
   const input = document.getElementById('fileInput');
   input.addEventListener('change', e => { for (const f of e.target.files) loadFile(f); input.value = ''; });
+  const isDataFile = n => /\.(vbo|ibt)$/i.test(n);
   const dz = document.getElementById('dropZone');
   ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('over'); }));
   ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('over'); }));
-  dz.addEventListener('drop', e => { e.stopPropagation(); for (const f of e.dataTransfer.files) if (/\.vbo$/i.test(f.name)) loadFile(f); });
+  dz.addEventListener('drop', e => { e.stopPropagation(); for (const f of e.dataTransfer.files) if (isDataFile(f.name)) loadFile(f); });
   // 整页也能拖
   ['dragover'].forEach(ev => document.body.addEventListener(ev, e => e.preventDefault()));
   document.body.addEventListener('drop', e => {
     e.preventDefault();
-    for (const f of e.dataTransfer.files) if (/\.vbo$/i.test(f.name)) loadFile(f);
+    for (const f of e.dataTransfer.files) if (isDataFile(f.name)) loadFile(f);
   });
   document.getElementById('applyAlign').onclick = () => {
     const s = SESSIONS.find(x => x.id === curId); if (!s) return;
@@ -754,4 +1014,64 @@ function setupIO() {
     document.getElementById('alignBox').classList.toggle('show');
   };
 }
-window.addEventListener('DOMContentLoaded', () => { initMap(); setupIO(); });
+/* ================= IndexedDB 持久化（数据只存本地浏览器，不上传） =================
+   存原始 points（+offset），打开页面时重新 analyze，保证算法升级后旧数据也能用新分析。 */
+let idb = null;
+function openDB() {
+  return new Promise((res, rej) => {
+    if (!window.indexedDB) { rej(new Error('no indexedDB')); return; }
+    const rq = indexedDB.open('kart-telemetry', 1);
+    rq.onupgradeneeded = () => { if (!rq.result.objectStoreNames.contains('sessions')) rq.result.createObjectStore('sessions', { keyPath: 'id' }); };
+    rq.onsuccess = () => { idb = rq.result; res(idb); };
+    rq.onerror = () => rej(rq.error);
+  });
+}
+function dbSave(s) {
+  if (!idb) return Promise.resolve();
+  try {
+    return new Promise(res => {
+      const tx = idb.transaction('sessions', 'readwrite');
+      tx.objectStore('sessions').put({
+        id: s.id, name: s.name, date: s.date, source: s.source || 'vbo',
+        points: s.points, offset: s.offset || { dLat: 0, dLon: 0 }, savedAt: Date.now()
+      });
+      tx.oncomplete = res; tx.onerror = () => res();
+    });
+  } catch (e) { return Promise.resolve(); }
+}
+function dbLoadAll() {
+  if (!idb) return Promise.resolve([]);
+  return new Promise(res => {
+    try {
+      const rq = idb.transaction('sessions', 'readonly').objectStore('sessions').getAll();
+      rq.onsuccess = () => res(rq.result || []);
+      rq.onerror = () => res([]);
+    } catch (e) { res([]); }
+  });
+}
+function dbDelete(id) {
+  if (!idb) return;
+  try { idb.transaction('sessions', 'readwrite').objectStore('sessions').delete(id); } catch (e) { }
+}
+function rebuildSession(rec) {
+  const s = { id: rec.id, name: rec.name, date: rec.date, source: rec.source || 'vbo',
+    points: rec.points, offset: rec.offset || { dLat: 0, dLon: 0 }, analysis: analyze(rec.points) };
+  return s;
+}
+/* 从数据库恢复会话 */
+async function restoreSessions() {
+  try {
+    await openDB();
+    const recs = await dbLoadAll();
+    for (const rec of recs) SESSIONS.push(rebuildSession(rec));
+    if (SESSIONS.length) {
+      renderSidebar();
+      selectSession(SESSIONS[SESSIONS.length - 1].id);   // 恢复上次最后一次查看的会话
+    }
+  } catch (e) { /* 无 IndexedDB 环境则静默降级 */ }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  initMap(); setupIO();
+  restoreSessions();
+});
