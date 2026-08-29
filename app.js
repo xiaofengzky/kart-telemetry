@@ -586,18 +586,34 @@ function speedColor(t) {
 
 /* ---------- 地图 ---------- */
 function initMap() {
-  // scrollWheelZoom:false —— 普通滚轮留给页面滚动（用户反馈"地图上滚轮动不了页面"）。
-  // 地图缩放：Ctrl/⌘+滚轮、左下角 +/- 按钮、双击、双指捏合。
+  // scrollWheelZoom:false —— 默认把滚轮留给页面滚动（用户反馈"地图上滚轮动不了页面"）。
+  // 但纯 Ctrl+滚轮太隐蔽，用户又反馈"地图不能滚轮放大"，所以做成【点击激活】：
+  // 点一下地图 → 滚轮归地图（可放大缩小）；鼠标移出地图 / 点页面别处 → 滚轮归页面。
   map = L.map('map', { zoomControl: false, attributionControl: true, scrollWheelZoom: false }).setView([30.55, 114.2], 15);
-  // Ctrl/⌘ + 滚轮 = 缩放地图。
+  let mapWheelOn = false;
+  const mapEl = map.getContainer();
   // ⚠ Leaflet 的 Map 事件里【没有 'wheel'】——map.on('wheel') 永远不会触发，
   //   必须直接监听容器 DOM 的 wheel（且要 passive:false 才能 preventDefault）。
-  map.getContainer().addEventListener('wheel', e => {
-    if (!(e.ctrlKey || e.metaKey)) return;      // 普通滚轮不拦截，页面正常滚动
+  mapEl.addEventListener('wheel', e => {
+    if (!(e.ctrlKey || e.metaKey || mapWheelOn)) return;   // 未激活时普通滚轮留给页面滚动
     e.preventDefault();
     const z = map.getZoom() + (e.deltaY > 0 ? -1 : 1);
     if (z >= map.getMinZoom() && z <= map.getMaxZoom()) map.setZoom(z);   // 不用 animate：滚轮缩放要跟手
   }, { passive: false });
+  // 激活态提示条（CSS 里 pointer-events:none，不挡地图交互）
+  const mapHint = document.createElement('div');
+  mapHint.className = 'maphint';
+  mapHint.textContent = '🖱️ 点击地图启用滚轮缩放 · 移出自动释放';
+  mapEl.appendChild(mapHint);
+  const setMapWheel = on => {
+    mapWheelOn = on;
+    mapEl.classList.toggle('wheelon', on);
+    mapHint.style.display = on ? 'none' : '';
+  };
+  setMapWheel(false);
+  map.on('mousedown', () => setMapWheel(true));
+  mapEl.addEventListener('mouseleave', () => setMapWheel(false));
+  document.addEventListener('mousedown', e => { if (!mapEl.contains(e.target)) setMapWheel(false); });
   // 全部免 API key 的公开瓦片源
   satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Esri' });
   darkLayer = L.tileLayer('https://cartodb-basemaps-a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', { maxZoom: 19, subdomains: 'abcd', attribution: 'CARTO' });
