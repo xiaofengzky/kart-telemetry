@@ -5,6 +5,25 @@
   let segCount = 50;
   let idl = null;
 
+  function sectorTable() {
+    const s = curSession(); if (!s || !idl) return '<p class="chint">暂无可计算的数据</p>';
+    const a = s.analysis;
+    const bestLap = a.best;
+    const bl = bestLap && bestLap.sector_times ? bestLap.sector_times : [0, 0, 0];
+    const third = idl.segCount / 3;
+    const rows = [0, 1, 2].map(k => {
+      const segs = idl.segs.filter(x => x.seg >= k * third && x.seg < (k + 1) * third);
+      const opt = segs.reduce((t, x) => t + x.time, 0);
+      const gain = Math.max(0, bl[k] - opt);
+      const act = bl[k] || opt;
+      return `<tr><td><b>S${k + 1}</b></td><td>${opt.toFixed(3)}s</td><td>${act.toFixed(3)}s</td>
+        <td class="${deltaCls(gain)}">−${gain.toFixed(3)}s</td>
+        <td>${(gain / Math.max(0.0001, idl.gain) * 100).toFixed(0)}%</td></tr>`;
+    }).join('');
+    return `<table class="ctab"><thead><tr><th>赛段</th><th>最优段组合</th><th>最快圈实际</th><th>可捡</th><th>占可捡总量</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  }
+
   function render() {
     const s = curSession(), box = document.getElementById('content');
     if (!s) { box.innerHTML = `<div class="blank">还没有数据。<br><a href="index.html">去车库上传一个 .vbo 或 .ibt 文件</a></div>`; return; }
@@ -53,6 +72,13 @@
           <button class="pbtn" id="cleanBtn">只留正常圈</button>
         </div>
         <p class="chint">分段越细，理论极限越快（每段都取到极致），但可操作性越低。<b>50 段</b>是常用的平衡点。</p>
+      </div>
+
+      <div class="card">
+        <h3>赛段最快 <span class="cunit">F1 风格 S1/S2/S3（赛道三等分）</span></h3>
+        ${sectorTable()}
+        <p class="chint">「最优段组合」= 该赛段内每小段取你所有圈的最快值拼起来；「最快圈实际」= 你实际最快圈在这个赛段花了多少。
+          中间的差距就是这个赛段理论上还能捡的时间。捡得最多的赛段，就是你最该集中练的地方。</p>
       </div>
 
       <div class="card">

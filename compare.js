@@ -162,7 +162,7 @@
     const v = view('delta');
     const cfg = {
       height: 320, view: v, zeroLine: true,
-      corners: curSession().analysis.corners,
+      corners: curSession().analysis.corners, sectors: true,
       xLabels: cmp.dist, xFmt: t => Math.round(t) + 'm',
       series: [
         { name: '', data: cmp.delta.map(x => Math.max(0, x)), color: '#ff6b6b', fill: 'rgba(255,107,107,.25)', width: 0, legend: false },
@@ -188,7 +188,7 @@
     const v = view('spd');
     const cfg = {
       height: 260, view: v, zeroLine: true,
-      corners: curSession().analysis.corners,
+      corners: curSession().analysis.corners, sectors: true,
       xLabels: cmp.dist, xFmt: t => Math.round(t) + 'm',
       series: [
         { name: '', data: cmp.spdDiff.map(x => Math.max(0, x)), color: '#3fb950', fill: 'rgba(63,185,80,.22)', width: 0, legend: false },
@@ -234,7 +234,7 @@
       const d1 = trA[ch].map(p => p.v), d2 = trB[ch].map(p => p.v);
       const unit = (!ir && (ch === 'thr' || ch === 'brk')) ? 'G' : c.unit;
       const cfg = {
-        height: 210, view: v, corners: s.analysis.corners,
+        height: 210, view: v, corners: s.analysis.corners, sectors: true,
         xLabels: trA[ch].map(p => p.d), xFmt: t => Math.round(t) + 'm',
         series: [
           { name: '#' + A, color: '#3b9eff', data: d1, width: 1.7 },

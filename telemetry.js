@@ -119,7 +119,7 @@
       })).filter(s2 => s2.data && s2.data.length);
       const cfg = {
         height: ch === 'speed' ? base + 50 : base,
-        view: v, corners: s.analysis.corners,
+        view: v, corners: s.analysis.corners, sectors: true,
         xLabels: (tr[ch][sel[0]] || []).map(p => p.d), xFmt: t => Math.round(t) + 'm',
         series,
         hoverIdx: v.hoverIdx,

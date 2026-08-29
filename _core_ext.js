@@ -253,6 +253,22 @@ function drawTraces(cv, cfg) {
     ctx.strokeStyle = 'rgba(245,166,35,.45)'; ctx.lineWidth = 1; ctx.setLineDash([3, 4]);
     ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke(); ctx.setLineDash([]);
   }
+  // F1 风格赛段背景（S1/S2/S3）：cfg.sectors 为 true 时绘制
+  if (cfg.sectors) {
+    const seg = [
+      [0, 1 / 3, 'S1', 'rgba(59,158,255,.06)'],
+      [1 / 3, 2 / 3, 'S2', 'rgba(34,211,238,.05)'],
+      [2 / 3, 1, 'S3', 'rgba(63,185,80,.05)']
+    ];
+    for (const [f0, f1, name, color] of seg) {
+      const x1 = sx(f0 * N), x2 = sx(f1 * N);
+      ctx.fillStyle = color; ctx.fillRect(x1, padT, x2 - x1, plotH);
+      ctx.strokeStyle = 'rgba(255,255,255,.10)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x2, padT); ctx.lineTo(x2, padT + plotH); ctx.stroke();
+      ctx.fillStyle = 'rgba(139,152,165,.7)'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(name, Math.max(x1 + 8, (x1 + x2) / 2), padT + 10);
+    }
+  }
   // 零线（Delta 图等需要）
   if (cfg.zeroLine && yMin < 0 && yMax > 0) {
     ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 1.2;

@@ -500,21 +500,24 @@ function analyze(points) {
       }
     }
   }
-  // 分段 & 波动区
+  // F1 风格三段赛段（S1/S2/S3）：每圈三个赛段时间 + 跨圈汇总。
+  // 用户反馈"用百分比看不清赛道上的提升点"，三段式更贴近赛事节奏。
   const sectors = [];
   if (full.length) {
-    const Dref = full.map(l => l.distance_m).sort((x, y) => x - y)[full.length >> 1];
-    const bounds = [0, .25, .5, .75, 1].map(x => x * Dref);
-    const st = [[], [], [], []];
+    const st = [[], [], []];
     for (const l of full) {
-      const a = l.startIdx, base = cum[a];
-      const idx = bounds.map(bd => { let ti = a; while (ti < l.endIdx && (cum[ti] - base) < bd) ti++; return ti; });
-      for (let k = 0; k < 4; k++) st[k].push(points[idx[k + 1]].t - points[idx[k]].t);
+      const a = l.startIdx, b = l.endIdx, base = cum[a], D = l.distance_m;
+      const bd = [D / 3, 2 * D / 3, D];
+      const idx = bd.map(t => { let ti = a; while (ti < b && (cum[ti] - base) < t) ti++; return ti; });
+      const t0 = points[a].t;
+      const sts = [points[idx[0]].t - t0, points[idx[1]].t - points[idx[0]].t, points[idx[2]].t - points[idx[1]].t];
+      l.sector_times = sts;                       // 供每圈表格显示 S1/S2/S3
+      st[0].push(sts[0]); st[1].push(sts[1]); st[2].push(sts[2]);
     }
-    for (let k = 0; k < 4; k++) {
+    for (let k = 0; k < 3; k++) {
       const v = st[k], m = v.reduce((s, x) => s + x, 0) / v.length;
       const sd = Math.sqrt(v.reduce((s, x) => s + (x - m) ** 2, 0) / v.length);
-      sectors.push({ sector: k + 1, mean_s: Math.round(m * 100) / 100, std_s: Math.round(sd * 100) / 100, best_s: Math.round(Math.min(...v) * 100) / 100 });
+      sectors.push({ sector: k + 1, name: 'S' + (k + 1), mean_s: Math.round(m * 100) / 100, std_s: Math.round(sd * 100) / 100, best_s: Math.round(Math.min(...v) * 100) / 100 });
     }
   }
   const worst = [];
@@ -583,7 +586,9 @@ function speedColor(t) {
 
 /* ---------- 地图 ---------- */
 function initMap() {
-  map = L.map('map', { zoomControl: false, attributionControl: true }).setView([30.55, 114.2], 15);
+  // scrollWheelZoom:false —— 地图上滚轮直接滚页面（用户反馈"地图上滚轮动不了"）。
+  // 地图缩放用左下角 +/- 按钮、拖拽或双指捏合。
+  map = L.map('map', { zoomControl: false, attributionControl: true, scrollWheelZoom: false }).setView([30.55, 114.2], 15);
   // 全部免 API key 的公开瓦片源
   satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Esri' });
   darkLayer = L.tileLayer('https://cartodb-basemaps-a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', { maxZoom: 19, subdomains: 'abcd', attribution: 'CARTO' });

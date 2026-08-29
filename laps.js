@@ -28,17 +28,18 @@
       <div class="card">
         <h3>每一圈</h3>
         <div class="tscroll"><table class="ctab">
-          <thead><tr><th>圈</th><th>圈速</th><th>差距</th><th>里程</th><th>极速</th><th>最低速</th>
-            <th>刹车点</th><th>全油门</th><th>峰值减速</th><th>G-Sum</th></tr></thead>
+          <thead><tr><th>圈</th><th>圈速</th><th>差距</th><th>S1</th><th>S2</th><th>S3</th>
+            <th>极速</th><th>最低速</th><th>刹车点</th><th>全油门</th><th>峰值减速</th><th>G-Sum</th></tr></thead>
           <tbody>${sorted.map(l => {
       const m = l.metrics || {};
       const d = l.time_s - fastest;
       const slow = l.time_s > median * 1.06;
+      const st = l.sector_times || [0, 0, 0];
       return `<tr class="${l.index === (a.best ? a.best.index : -1) ? 'best' : ''}">
               <td><b>#${l.index}</b>${slow ? ' <span title="明显偏慢，可能是出场圈/失误圈" style="color:var(--amber)">⚠</span>' : ''}</td>
               <td>${l.time_s.toFixed(3)}s</td>
               <td class="${deltaCls(d)}">${d < 0.0005 ? '最快' : deltaTxt(d)}</td>
-              <td>${l.distance_m.toFixed(0)} m</td>
+              <td>${st[0].toFixed(2)}s</td><td>${st[1].toFixed(2)}s</td><td>${st[2].toFixed(2)}s</td>
               <td>${l.max_speed.toFixed(1)}</td>
               <td>${m.minSpeed != null ? m.minSpeed.toFixed(1) : '-'}</td>
               <td>${m.brakeCount != null ? m.brakeCount : '-'}</td>
@@ -47,17 +48,17 @@
               <td>${m.gsumPeak != null ? m.gsumPeak : '-'}</td>
             </tr>`;
     }).join('')}</tbody></table></div>
-        <p class="chint">带 <b style="color:var(--amber)">⚠</b> 的圈比中位圈慢 6% 以上，多半是出场圈或失误圈，做一致性分析时建议排除。</p>
+        <p class="chint">带 <b style="color:var(--amber)">⚠</b> 的圈比中位圈慢 6% 以上，多半是出场圈或失误圈，做一致性分析时建议排除。<b>S1/S2/S3</b> 是 F1 风格的三段赛段时间（赛道三等分）。</p>
       </div>
 
       ${a.sectors && a.sectors.length ? `
       <div class="card">
-        <h3>分段表现 <span class="cunit">把赛道按距离四等分</span></h3>
-        <table class="ctab"><thead><tr><th>分段</th><th>平均</th><th>最快</th><th>波动 ±</th></tr></thead>
+        <h3>分段表现 <span class="cunit">F1 风格三段赛段</span></h3>
+        <table class="ctab"><thead><tr><th>赛段</th><th>平均</th><th>最快</th><th>波动 ±</th></tr></thead>
           <tbody>${a.sectors.map(s2 => `<tr>
-            <td>S${s2.sector}</td><td>${s2.mean_s.toFixed(3)}s</td><td>${s2.best_s.toFixed(3)}s</td>
+            <td><b>${s2.name || ('S' + s2.sector)}</b></td><td>${s2.mean_s.toFixed(3)}s</td><td>${s2.best_s.toFixed(3)}s</td>
             <td class="${s2.std_s > 0.5 ? 'd-pos' : 'd-zero'}">±${s2.std_s}s</td></tr>`).join('')}</tbody></table>
-        <p class="chint">波动大的分段说明这一段你的跑法不稳定，是最该固定下来的地方。</p>
+        <p class="chint">波动大的赛段说明这一段你的跑法不稳定，是最该固定下来的地方。想具体看 S1/S2/S3 里哪个弯慢，去 <a href="compare.html" style="color:var(--blue)">多圈对比</a> 或 <a href="telemetry.html" style="color:var(--blue)">遥测通道</a>（图上已标出 S1/S2/S3 分区）。</p>
       </div>` : ''}
 
       ${a.worstZones && a.worstZones.length ? `

@@ -7,11 +7,11 @@
 html,body{margin:0;min-height:100%;background:var(--bg);color:var(--txt);
   font-family:-apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,Roboto,sans-serif;
   font-size:13px;-webkit-text-size-adjust:100%;overscroll-behavior:none}
-/* 滚动修复：老规则把 html/body 锁死在视口高度并 overflow:hidden，
-   多页面（body.mpage）内容流式撑高页面后会被裁剪、整页滚不动。
-   若要恢复"应用内单页"布局，请把 overflow:hidden 加在具体容器上，别放回 html/body。 */
-html:has(body.mpage){overflow:auto;height:auto}
-body.mpage{overflow:auto;height:auto;min-height:100vh}
+/* 滚动：不设置任何 overflow（保持默认 visible），内容流式撑高页面，
+   视口滚动交给浏览器默认行为——所有浏览器都有效，不依赖 :has()。
+   老的 overflow:hidden 已从 html/body 移除；若未来要"应用内单页"布局，
+   把 overflow:hidden 加在具体容器上，别放回 html/body。 */
+body.mpage{min-height:100vh}
 .topbar{height:52px;display:flex;align-items:center;gap:14px;padding:0 18px;
   background:linear-gradient(90deg,#0d1117,#161d27);border-bottom:1px solid var(--line)}
 .menubtn{background:var(--bg3);color:var(--txt);border:1px solid var(--line);
