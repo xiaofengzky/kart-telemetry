@@ -4,9 +4,14 @@
   --green:#3fb950; --amber:#e3a008; --blue:#3b9eff;
 }
 *{box-sizing:border-box}
-html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--txt);
   font-family:-apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,Roboto,sans-serif;
-  font-size:13px;overflow:hidden;-webkit-text-size-adjust:100%;overscroll-behavior:none}
+  font-size:13px;-webkit-text-size-adjust:100%;overscroll-behavior:none}
+/* 滚动修复：老规则把 html/body 锁死在视口高度并 overflow:hidden，
+   多页面（body.mpage）内容流式撑高页面后会被裁剪、整页滚不动。
+   若要恢复"应用内单页"布局，请把 overflow:hidden 加在具体容器上，别放回 html/body。 */
+html:has(body.mpage){overflow:auto;height:auto}
+body.mpage{overflow:auto;height:auto;min-height:100vh}
 .topbar{height:52px;display:flex;align-items:center;gap:14px;padding:0 18px;
   background:linear-gradient(90deg,#0d1117,#161d27);border-bottom:1px solid var(--line)}
 .menubtn{background:var(--bg3);color:var(--txt);border:1px solid var(--line);
@@ -67,7 +72,12 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
   background:linear-gradient(180deg,#1a232e,#131a22);border-bottom:1px solid var(--line)}
 .mmtitle{font-weight:700;font-size:12px;color:var(--txt)}
 .mmtools{display:flex;gap:6px}
-#map{position:absolute;inset:34px 0 0 0;background:#000}
+/* 关键：这条规则只对老单页布局右上角小地图模块（.mapmod 内部）生效。
+   之前用 #map 全局选择器，导致 track.html 的整页大地图也被设成 absolute
+   并用 inset 撑满 .mapmod（不存在），结果脱离文档流被父容器裁成一条窄带。
+   多页面架构下 track.html 的 #map 是 block 元素，由 .bigmap{height:440px}
+   控制高度，Leaflet 自己设的 .leaflet-container{position:relative} 生效。 */
+.mapmod #map{position:absolute;inset:34px 0 0 0;background:#000}
 .mapbadge{position:absolute;left:10px;top:44px;z-index:500;background:rgba(13,17,23,.82);
   border:1px solid var(--line);border-radius:7px;padding:5px 9px;font-size:11px;color:var(--mut)}
 .mypos{position:absolute;left:10px;top:84px;z-index:500;background:rgba(13,17,23,.92);
