@@ -93,6 +93,15 @@ body.mpage{min-height:100vh}
   box-sizing:border-box;transform-origin:center;animation:locpulse 1.8s ease-out infinite}
 @keyframes locpulse{0%{transform:scale(1);opacity:.9}100%{transform:scale(3.6);opacity:0}}
 .leaflet-popup-content{font-size:12px}
+/* 从极限圈速页跳过来要重点看的赛道段 */
+/* top:46px = 刚好落在 .maphead（约 44px 高）下面的地图区，盖住 .maphint 和 .mapbadge */
+.focusbar{position:absolute;left:8px;right:8px;top:46px;z-index:950;
+  background:rgba(12,14,20,.92);border:1px solid rgba(225,6,0,.55);border-radius:9px;
+  padding:7px 10px;font-size:12px;color:#e8ecf4;line-height:1.6;
+  box-shadow:0 3px 14px rgba(0,0,0,.45);pointer-events:auto}
+.focusbar .mut{color:var(--mut);font-size:11px}
+.mut{color:var(--mut)}
+/* 页面内的次要文字（与 focusbar 里的 .mut 通用） */
 /* 地图滚轮缩放：默认把滚轮让给页面，点一下地图才"接管"滚轮。
    .maphint 是提示条，必须 pointer-events:none，否则会挡住拖拽/点击。 */
 .leaflet-container{position:relative}
@@ -356,14 +365,43 @@ body.mpage{overflow:auto;height:auto}
 .lapchip.warn::after{content:' ⚠';color:var(--amber)}
 .lapchip .lt{color:inherit;opacity:.65;font-size:11px;margin-left:4px}
 
-/* 分段条形（极限圈速） */
-.segrow{display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)}
-.segrow:last-child{border-bottom:none}
-.segrow .segno{width:52px;color:var(--mut);font-size:11.5px;font-variant-numeric:tabular-nums}
-.segrow .segbar{flex:1;height:14px;background:var(--bg3);border-radius:3px;overflow:hidden;position:relative}
+/* 分段条形（极限圈速）——每行是可点按钮 */
+.segfind{display:flex;gap:14px;align-items:flex-start}
+.segmap{flex:0 0 300px;position:relative}
+.segmap canvas{width:100%;height:230px;display:block;background:#0b0d12;
+  border:1px solid var(--line);border-radius:9px}
+.sketchhint{position:absolute;left:8px;bottom:8px;right:8px;text-align:center;
+  font-size:11px;color:var(--mut);pointer-events:none}
+.seglist{flex:1;min-width:0}
+.segrow{display:flex;align-items:center;gap:10px;width:100%;padding:6px 8px;
+  border:1px solid transparent;border-bottom:1px solid rgba(255,255,255,.05);
+  background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;border-radius:7px}
+.segrow:hover{background:rgba(255,255,255,.045)}
+.segrow.on{background:rgba(225,6,0,.13);border-color:rgba(225,6,0,.5)}
+.segrow .segloc{width:130px;flex:0 0 130px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.segrow .secs{display:inline-block;min-width:24px;margin-right:6px;padding:1px 5px;border-radius:4px;
+  background:rgba(59,158,255,.16);color:#7dc0ff;font-size:10.5px;font-weight:700}
+.segrow.on .secs{background:rgba(225,6,0,.25);color:#ff9b9b}
+.segrow .segpct{width:150px;flex:0 0 150px;color:var(--mut);font-size:11px;
+  font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.segrow .segbar{flex:1;min-width:50px;height:14px;background:var(--bg3);border-radius:3px;overflow:hidden;position:relative}
 .segrow .segfill{height:100%;background:linear-gradient(90deg,#e10600,#ff6b6b);border-radius:3px}
-.segrow .segval{width:78px;text-align:right;font-size:12px;font-variant-numeric:tabular-nums}
-.segrow .seglap{width:44px;text-align:right;font-size:11px;color:var(--mut)}
+.segrow .segval{width:78px;flex:0 0 78px;text-align:right;font-size:12px;font-variant-numeric:tabular-nums}
+.segrow .seglap{width:44px;flex:0 0 44px;text-align:right;font-size:11px;color:var(--mut)}
+/* 选中段的详情 */
+.segdetail{margin-top:12px;padding:11px 13px;background:var(--bg2);border:1px solid var(--line);border-radius:9px}
+.segdetail .sdhead{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:9px}
+.segdetail .sdtag{padding:2px 7px;border-radius:4px;background:rgba(59,158,255,.16);
+  color:#7dc0ff;font-size:11px;font-weight:700}
+.segdetail .sdpct{color:var(--mut);font-size:11.5px}
+.segdetail .sdgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:9px}
+.segdetail .sdcell{background:rgba(255,255,255,.03);border-radius:7px;padding:7px 9px}
+.segdetail .sdcell .k{font-size:10.5px;color:var(--mut);margin-bottom:3px}
+.segdetail .sdcell .v{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+.segdetail .mut{color:var(--mut);font-weight:400;font-size:11px}
+.segdetail .sdtip{margin-top:9px;font-size:12px;color:#cfd6e4;line-height:1.6}
+/* 赛段表的位置列 */
+.ctab .loc{color:var(--mut);font-size:11px}
 
 /* 提示条 */
 .notice{background:#1b1407;border:1px solid #3a2c0c;border-left:3px solid var(--amber);
@@ -390,9 +428,18 @@ body.mpage{overflow:auto;height:auto}
   .lapchip{min-height:36px;display:inline-flex;align-items:center;padding:7px 13px;border-radius:18px}
   .pbtn{min-height:36px;padding:7px 13px;font-size:12.5px;border-radius:18px;
     display:inline-flex;align-items:center}
-  .segrow .segno{width:44px;font-size:11px}
-  .segrow .segval{width:66px;font-size:11.5px}
-  .segrow .seglap{width:38px}
+  /* 窄屏：小地图改到列表上方整宽显示，段行压缩成两行信息 */
+  .segfind{flex-direction:column;gap:10px}
+  .segmap{flex:none;width:100%}
+  .segmap canvas{height:200px}
+  .seglist{width:100%}
+  .segrow{flex-wrap:wrap;gap:6px 8px;padding:7px 8px;min-height:40px}
+  .segrow .segloc{flex:1 1 auto;width:auto;font-size:12.5px}
+  .segrow .segpct{flex:0 0 auto;width:auto;font-size:10.5px}
+  .segrow .segval{flex:0 0 68px;width:68px;font-size:11.5px}
+  .segrow .seglap{flex:0 0 34px;width:34px}
+  .segrow .segbar{flex:1 1 100%;order:9;height:8px}
+  .segdetail .sdgrid{grid-template-columns:repeat(2,1fr)}
 }
 @media(max-width:400px){
   .stats{grid-template-columns:repeat(2,1fr)}

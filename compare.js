@@ -11,6 +11,17 @@
 
   function lapByIdx(i) { const s = curSession(); return s ? s.analysis.full.find(l => l.index === i) : null; }
 
+  /* 从极限圈速页传过来的「要对比哪两圈」，读完立刻清掉，避免下次进页面被粘住 */
+  function loadFocusCmp() {
+    try {
+      const raw = localStorage.getItem('kart.focusCmp');
+      if (!raw) return null;
+      localStorage.removeItem('kart.focusCmp');
+      const o = JSON.parse(raw);
+      return (o && o.a != null && o.b != null) ? o : null;
+    } catch (e) { return null; }
+  }
+
   /* 计算两圈的各通道曲线 */
   function build() {
     const s = curSession(); if (!s || A == null || B == null) return;
@@ -36,6 +47,9 @@
         <a href="laps.html">查看圈速</a></div>`;
       return;
     }
+    // 从「极限圈速」页点「对比这两圈」过来的：直接选中指定的两圈（读完即清）
+    const want = loadFocusCmp();
+    if (want && lapByIdx(want.a) && lapByIdx(want.b) && want.a !== want.b && a.full.length > 1) { A = want.a; B = want.b; }
     if (A == null || !lapByIdx(A)) A = a.best ? a.best.index : a.full[0].index;
     if (B == null || !lapByIdx(B) || B === A) {
       const sorted = [...a.full].sort((x, y) => x.time_s - y.time_s);

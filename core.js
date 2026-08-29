@@ -926,12 +926,148 @@ function lapTrace(s, lap, ch, N = 1000) {
       pct: k / N * 100,
       d: cum[ti] - d0,
       t: s.points[ti].t - t0,
-      v: channelValue(s, ti, ch)
+      v: channelValue(s, ti, ch),
+      lat: s.points[ti].lat + (s.offset ? s.offset.dLat : 0),
+      lon: s.points[ti].lon + (s.offset ? s.offset.dLon : 0)
     });
   }
   // 收尾对齐：末点强制为圈末，避免采样误差让总时长对不上
   if (out.length) { out[out.length - 1].d = cum[B] - d0; out[out.length - 1].t = s.points[B].t - t0; }
   return out;
+}
+
+/* ---------- 把「圈内进度区间」翻译成人能看懂的赛道位置 ----------
+   用户看不懂"第 37 段"，但看得懂"S2 · T5 → T6 之间"。
+   返回 { sector:'S2', sectorIdx:1, label:'T5 → T6', cornerIds:[], distFrom, distTo } */
+function segLocation(s, fromPct, toPct) {
+  const a = s.analysis;
+  const cs = (a.corners || []).slice().sort((x, y) => x.progress_pct - y.progress_pct);
+  const si = Math.max(0, Math.min(2, Math.floor(fromPct / (100 / 3))));
+  const inside = cs.filter(c => c.progress_pct >= fromPct && c.progress_pct < toPct);
+  let label;
+  if (inside.length === 1) label = 'T' + inside[0].id;
+  else if (inside.length > 1) label = `T${inside[0].id} → T${inside[inside.length - 1].id}`;
+  else {
+    const prev = cs.slice().reverse().find(c => c.progress_pct < fromPct);
+    const next = cs.find(c => c.progress_pct >= toPct);
+    if (prev && next) label = `T${prev.id} → T${next.id} 之间`;
+    else if (prev) label = `T${prev.id} 之后`;
+    else if (next) label = `T${next.id} 之前`;
+    else label = '直路段';
+  }
+  const D = a.best ? a.best.distance_m : 0;
+  return {
+    sector: 'S' + (si + 1), sectorIdx: si,
+    label, cornerIds: inside.map(c => c.id),
+    distFrom: Math.round(D * fromPct / 100), distTo: Math.round(D * toPct / 100)
+  };
+}
+
+/* 某一段区间内，某一圈的实际数据（用原始点算，比 segCount 分辨率高得多）。
+   段的耗时请仍用 idl.perLap[].times，口径和"极限圈速"一致；
+   这里只用来看速度细节（最低/最高/入段/出段速度）。 */
+function segStats(s, lap, fromPct, toPct) {
+  const cum = s.analysis.cum, A = lap.startIdx, B = lap.endIdx, D = lap.distance_m, P = s.points;
+  const d0 = cum[A];
+  const da = d0 + fromPct / 100 * D, db = d0 + toPct / 100 * D;
+  let i0 = A, i1 = B;
+  while (i0 < B && cum[i0] < da) i0++;
+  while (i1 > A && cum[i1] > db) i1--;
+  if (i1 < i0) i1 = i0;
+  let vmin = Infinity, vmax = -Infinity, sum = 0, n = 0;
+  for (let i = i0; i <= i1; i++) { const v = P[i].vel; if (v < vmin) vmin = v; if (v > vmax) vmax = v; sum += v; n++; }
+  return {
+    time: P[i1].t - P[i0].t,
+    vmin: n ? vmin : 0, vmax: n ? vmax : 0, vavg: n ? sum / n : 0,
+    vStart: P[i0].vel, vEnd: P[i1].vel, n
+  };
+}
+
+/* ---------- 赛道小地图（纯 canvas，不依赖 Leaflet） ----------
+   用于在极限圈速/对比页就地高亮"某一段在赛道哪儿"，避免为了看一段位置跳页。
+   用法：trackSketch(cv, s, { highlights:[{from,to,color,width}], corners:true, onPick:pct=>{} })
+   返回 { X, Y, pts, pickClostest(px,py) } 便于调用方做交互。 */
+function trackSketch(cv, s, opts = {}) {
+  const b = s.analysis.best;
+  if (!b) return null;
+  const N = opts.N || 400;
+  const pts = lapTrace(s, b, 'speed', N);
+  const lats = pts.map(p => p.lat), lons = pts.map(p => p.lon);
+  const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+  const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+  const W = cv.clientWidth || 420, H = cv.clientHeight || 260;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  const pad = 18;
+  const spanLat = (maxLat - minLat) || 1e-9, spanLon = (maxLon - minLon) || 1e-9;
+  const k = Math.min((W - pad * 2) / spanLon, (H - pad * 2) / spanLat);
+  const ox = pad + ((W - pad * 2) - spanLon * k) / 2;
+  const oy = pad + ((H - pad * 2) - spanLat * k) / 2;
+  const X = p => ox + (p.lon - minLon) * k;
+  const Y = p => oy + (maxLat - p.lat) * k;      // 纬度越大越靠上，所以 y 取反
+
+  const vmin = s.analysis.vmin, vmax = s.analysis.vmax, vspan = (vmax - vmin) || 1;
+  const stroke = (i0, i1, color, width, alpha) => {
+    g.beginPath();
+    for (let i = i0; i <= i1 && i < pts.length; i++) {
+      const x = X(pts[i]), y = Y(pts[i]);
+      i === i0 ? g.moveTo(x, y) : g.lineTo(x, y);
+    }
+    g.strokeStyle = color; g.lineWidth = width; g.globalAlpha = alpha == null ? 1 : alpha;
+    g.lineCap = 'round'; g.lineJoin = 'round'; g.stroke(); g.globalAlpha = 1;
+  };
+  // 底图：按速度着色（蓝=慢 → 红=快），和主赛道图一致
+  for (let i = 1; i < pts.length; i++) {
+    stroke(i - 1, i, speedColor((pts[i].v - vmin) / vspan), opts.thin ? 2 : 3, .9);
+  }
+  // 起终点
+  if (pts.length) {
+    g.beginPath(); g.arc(X(pts[0]), Y(pts[0]), 3.2, 0, 7);
+    g.fillStyle = '#e8ecf4'; g.fill();
+    g.strokeStyle = '#0b0d12'; g.lineWidth = 1.4; g.stroke();
+  }
+  // 高亮区间（进度%）
+  const hi = opts.highlights || [];
+  for (const h of hi) {
+    const i0 = Math.max(0, Math.round(h.from / 100 * N));
+    const i1 = Math.min(pts.length - 1, Math.round(h.to / 100 * N));
+    if (i1 <= i0) continue;
+    stroke(i0, i1, h.color || '#e10600', h.width || 7, .45);
+    stroke(i0, i1, h.color || '#e10600', h.width ? h.width * .45 : 3, 1);
+  }
+  // 弯号标注
+  if (opts.corners !== false && hi.length <= 3) {
+    const cs = s.analysis.corners || [];
+    g.font = '600 10px system-ui,sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    for (const c of cs) {
+      const i = Math.min(pts.length - 1, Math.round(c.progress_pct / 100 * N));
+      const x = X(pts[i]), y = Y(pts[i]);
+      g.beginPath(); g.arc(x, y, 7.5, 0, 7);
+      g.fillStyle = 'rgba(11,13,18,.85)'; g.fill();
+      g.strokeStyle = 'rgba(232,236,244,.5)'; g.lineWidth = 1; g.stroke();
+      g.fillStyle = '#e8ecf4'; g.fillText('T' + c.id, x, y + .5);
+    }
+  }
+  const pickClosest = (px, py) => {
+    let best = -1, bd = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const dx = X(pts[i]) - px, dy = Y(pts[i]) - py, d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best < 0 ? null : pts[best].pct;
+  };
+  if (opts.onPick) {
+    cv.onclick = e => {
+      const r = cv.getBoundingClientRect();
+      const pct = pickClosest(e.clientX - r.left, e.clientY - r.top);
+      if (pct != null) opts.onPick(pct);
+    };
+    cv.style.cursor = 'pointer';
+  }
+  return { X, Y, pts, N, pickClosest };
 }
 
 /* ---------- 多圈对比：累积时间 Delta ----------
@@ -1014,7 +1150,8 @@ function idealLap(s, segCount = 50, laps = null) {
   return {
     segCount, idealTime, bestTime: bestLap ? bestLap.time_s : null,
     gain: Math.max(0, gain), segs, perLap,
-    top: [...segs].sort((a, b) => b.gain - a.gain).slice(0, 6)
+    // ⚠ 别只留 6 段：页面上要列「可捡时间最多的 12 段」，这里不够就只渲染出 6 行
+    top: [...segs].sort((a, b) => b.gain - a.gain).slice(0, 24)
   };
 }
 

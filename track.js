@@ -3,6 +3,14 @@
   let lapSel = null;          // 选中的走线圈（Set of lap index）
   let showIdeal = false;      // 理论走线极限（默认关，需要对比时再开）
   let lapOverlay = null;      // L.layerGroup 走线叠加层
+  let focusSeg = null;        // 从「极限圈速」页点过来的重点段 {from,to,lap,gain,label}
+  let focusFitted = false;    // 只自动缩放到重点段一次，否则重绘时视野会被反复拉回
+
+  function loadFocus() {
+    try { focusSeg = JSON.parse(localStorage.getItem('kart.focusSeg') || 'null'); }
+    catch (e) { focusSeg = null; }
+    focusFitted = false;
+  }
 
   function render() {
     const s = curSession(), box = document.getElementById('content');
@@ -103,6 +111,49 @@
         color: '#ffd23f', weight: 2.6, dashArray: '7 5', opacity: .85, lineCap: 'round'
       }).addTo(lapOverlay);
     }
+    // 从「极限圈速」页跳过来要看的重点段：粗红线 + 白色虚线芯，并自动缩放到这一段
+    if (focusSeg && a.best) {
+      const b = a.best, cum = a.cum, P = s.points;
+      const D = b.distance_m, d0 = cum[b.startIdx];
+      const da = d0 + focusSeg.from / 100 * D, db = d0 + focusSeg.to / 100 * D;
+      const line = [];
+      for (let i = b.startIdx; i <= b.endIdx; i++) {
+        if (cum[i] < da || cum[i] > db) continue;
+        line.push([P[i].lat + off.dLat, P[i].lon + off.dLon]);
+      }
+      if (line.length > 1) {
+        L.polyline(line, { color: '#e10600', weight: 9, opacity: .55, lineCap: 'round' }).addTo(lapOverlay);
+        L.polyline(line, { color: '#ff5b5b', weight: 4, opacity: .95, lineCap: 'round' }).addTo(lapOverlay);
+        L.polyline(line, { color: '#fff', weight: 1.6, opacity: .9, dashArray: '4 6' }).addTo(lapOverlay);
+        if (!focusFitted) {
+          focusFitted = true;
+          try { map.fitBounds(L.latLngBounds(line), { padding: [50, 50], maxZoom: 18 }); } catch (e) { }
+        }
+      }
+    }
+    renderFocusBar(s);
+  }
+
+  /* 重点段提示条 */
+  function renderFocusBar(s) {
+    const bar = document.getElementById('focusBar');
+    if (!bar) return;
+    const badge = document.getElementById('mapBadge');
+    if (!focusSeg || !s.analysis.best) { bar.style.display = 'none'; if (badge) badge.style.display = ''; return; }
+    if (badge) badge.style.display = 'none';        // 提示条和 badge 会叠在一起，二选一
+    let loc = focusSeg.label;
+    if (!loc || typeof loc === 'string') loc = segLocation(s, focusSeg.from, focusSeg.to);
+    bar.style.display = '';
+    bar.innerHTML = `🔴 <b>${loc.sector} · ${loc.label}</b>
+      <span class="mut">圈内 ${focusSeg.from.toFixed(0)}–${focusSeg.to.toFixed(0)}% · ${loc.distFrom}–${loc.distTo} m</span>
+      · 可捡 <b class="d-pos">−${(focusSeg.gain || 0).toFixed(3)}s</b>，最快来自 <b>#${focusSeg.lap}</b>
+      <button class="mini" id="focusClear" style="margin-left:8px">清除</button>`;
+    const cl = document.getElementById('focusClear');
+    if (cl) cl.onclick = () => {
+      focusSeg = null; focusFitted = false;
+      localStorage.removeItem('kart.focusSeg');
+      renderFocusBar(s); drawLapOverlays(s);
+    };
   }
   function bindTrackLaps(s) {
     const box = document.getElementById('trackLapChips');
@@ -165,7 +216,7 @@
   }
 
   document.addEventListener('DOMContentLoaded', () => {
-    bootPage('track.html', render);
+    bootPage('track.html', () => { loadFocus(); render(); });
     bindMapUI();
   });
 })();
