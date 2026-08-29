@@ -347,14 +347,25 @@ function bindTraceChart(cv, getCfg, onView) {
   const pointers = new Map();
   let pan = null, pinch = null;
   const clamp = v => {
-    const s = Math.min(1, Math.max(0.004, v.i1 - v.i0));
-    v.i0 = Math.max(0, Math.min(N() - s, v.i0)); v.i1 = v.i0 + s;
+    const n = N();
+    // ⚠ 视窗 i0/i1 是【数据下标】（0..N），不是归一化 0..1！
+    // 之前误用 Math.min(1, span)，一次滚轮就把 1000 点的窗口压成 1 点，曲线变直线。
+    const s = Math.min(n, Math.max(4, v.i1 - v.i0));   // 视窗至少 4 个点，最多整圈
+    v.i0 = Math.max(0, Math.min(n - s, v.i0)); v.i1 = v.i0 + s;
   };
   const zoomAt = (v, f, k) => {
     const at = v.i0 + f * (v.i1 - v.i0);
     v.i0 = at - (at - v.i0) * k; v.i1 = at + (v.i1 - at) * k; clamp(v);
   };
-  cv.onwheel = e => { e.preventDefault(); const c = getCfg(); if (!c) return; zoomAt(c.view, frac(e.clientX), e.deltaY > 0 ? 1.2 : 1 / 1.2); onView && onView(); };
+  // 滚轮：Ctrl/⌘ + 滚轮 = 图表缩放；普通滚轮【不拦截】，让页面正常滚动。
+  // （遥测图上直接滚轮缩放是 Garage61 的做法，但用户反馈与翻页冲突，改成按键组合）
+  cv.onwheel = e => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    const c = getCfg(); if (!c) return;
+    zoomAt(c.view, frac(e.clientX), e.deltaY > 0 ? 1.2 : 1 / 1.2);
+    onView && onView();
+  };
   cv.onpointerdown = e => {
     cv.setPointerCapture(e.pointerId); pointers.set(e.pointerId, e.clientX);
     if (pointers.size === 2) {
@@ -387,6 +398,40 @@ function bindTraceChart(cv, getCfg, onView) {
   cv.onpointerup = end; cv.onpointercancel = end;
   cv.onpointerleave = () => { const c = getCfg(); if (c) { c.hoverIdx = null; pan = null; onView && onView(); } };
   cv.ondblclick = () => { const c = getCfg(); if (c) { c.view.i0 = 0; c.view.i1 = N(); onView && onView(); } };
+}
+/* 图表缩放工具条：注入图表头部容器（holder），提供 缩小 / 复位 / 放大。
+   普通滚轮不再缩放（让位给页面滚动），缩放靠 Ctrl+滚轮、双指、双击复位、或这三个按钮。 */
+function chartTools(holder, cv, getCfg, onView) {
+  if (!holder || !cv) return;
+  if (holder.querySelector('.ctbtn')) return;             // 只注入一次
+  holder.classList.add('ctwrap');
+  const mark = document.createElement('span');
+  mark.className = 'ctmark';
+  mark.title = 'Ctrl/⌘ + 滚轮 = 缩放，普通滚轮 = 翻页；双击图 = 复位';
+  mark.textContent = 'Ctrl+滚轮缩放 · 双击复位';
+  holder.appendChild(mark);
+  const group = document.createElement('span');
+  group.className = 'ctgroup';
+  group.innerHTML = '<button class="ctbtn" data-z="-1" title="缩小">−</button>' +
+    '<button class="ctbtn" data-z="0" title="复位视图">⤢</button>' +
+    '<button class="ctbtn" data-z="1" title="放大">＋</button>';
+  holder.appendChild(group);
+  holder.addEventListener('click', e => {
+    const b = e.target.closest ? e.target.closest('.ctbtn') : null;
+    if (!b) return;
+    const c = getCfg(); if (!c || !c.series || !c.series[0] || !c.series[0].data) return;
+    const n = c.series[0].data.length - 1, v = c.view;
+    const z = b.dataset.z;
+    if (z === '0') { v.i0 = 0; v.i1 = n; }
+    else {
+      const at = (v.i0 + v.i1) / 2;
+      const k = z === '1' ? 1 / 1.6 : 1.6;
+      v.i0 = at - (at - v.i0) * k; v.i1 = at + (v.i1 - at) * k;
+      const s = Math.min(n, Math.max(4, v.i1 - v.i0));
+      v.i0 = Math.max(0, Math.min(n - s, v.i0)); v.i1 = v.i0 + s;
+    }
+    onView && onView();
+  });
 }
 
 /* ================================================================

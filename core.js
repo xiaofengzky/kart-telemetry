@@ -953,8 +953,8 @@ function compareLaps(s, lapA, lapB, N = 1000) {
    累加得到「理论最快圈」。它一定 ≤ 实际最快圈，差值就是还能捡的时间。
    注意：各段来自不同圈，物理上未必能连着跑出来（Garage61 也叫它 optimal lap，
    只当改进方向看，别当可达目标）。 */
-function idealLap(s, segCount = 50) {
-  const full = s.analysis.full;
+function idealLap(s, segCount = 50, laps = null) {
+  const full = laps && laps.length ? laps : s.analysis.full;
   if (!full.length) return null;
   const perLap = [];
   for (const lap of full) {
@@ -970,7 +970,8 @@ function idealLap(s, segCount = 50) {
     segs.push({ seg: k, from: k / segCount * 100, to: (k + 1) / segCount * 100, time: mn, lap: who });
   }
   const idealTime = segs.reduce((a, b) => a + b.time, 0);
-  const bestLap = s.analysis.best;
+  // 从「参与计算的圈」里取最快圈，而不是全场最快——否则筛选掉出场圈后对不上
+  const bestLap = full.reduce((m, l) => (!m || l.time_s < m.time_s) ? l : m, null);
   // 相对最快圈，每段还能捡多少（正值 = 有提升空间）
   let bt = null;
   if (bestLap) {
@@ -1038,11 +1039,14 @@ function updateSessionMeta() {
 /* 各页面统一的启动流程：恢复数据 → 选中会话 → 渲染导航 */
 async function bootPage(activeFile, onReady) {
   renderNav(activeFile);
+  pageRefresh = onReady || null;             // 供 renderSidebar / selectSession 回调
   try { await openDB(); } catch (e) { }
   const recs = await dbLoadAll();
   for (const r of recs) SESSIONS.push(rebuildSession(r));
   const want = loadCurId();
   curId = (want && SESSIONS.some(s => s.id === want)) ? want : (SESSIONS.length ? SESSIONS[SESSIONS.length - 1].id : null);
+  renderSessionBar(pageRefresh);
+  setupUpload('fileInput', () => { if (pageRefresh) pageRefresh(); });
   onReady && onReady();
 }
 
@@ -1069,9 +1073,8 @@ function drawTraces(cv, cfg) {
   // Y 量程
   let yMin = Infinity, yMax = -Infinity;
   for (const s of series) {
-    const lo = s.min != null ? s.min : (s.forceZero ? 0 : null);
     for (let i = i0; i <= i1; i++) { const y = s.data[i]; if (y < yMin) yMin = y; if (y > yMax) yMax = y; }
-    if (s.forceZero) yMin = Math.min(yMin, 0);
+    if (s.forceZero) yMin = Math.min(yMin, 0);   // 需要零线时把 0 纳入量程
   }
   if (cfg.yMin != null) yMin = cfg.yMin;
   if (cfg.yMax != null) yMax = cfg.yMax;
@@ -1168,11 +1171,12 @@ function drawTraces(cv, cfg) {
       }
     }
   }
-  // 图例
+  // 图例（series.legend === false 的序列只画不标注，用于 Delta 的填充带）
   if (cfg.legend !== false && series.length) {
     ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
     let lx = padL + 4;
     for (const s of series) {
+      if (s.legend === false) continue;
       const txt = s.name || '';
       const w = ctx.measureText(txt).width;
       ctx.fillStyle = s.color; ctx.fillRect(lx, padT + 3, 8, 3);
@@ -1192,14 +1196,25 @@ function bindTraceChart(cv, getCfg, onView) {
   const pointers = new Map();
   let pan = null, pinch = null;
   const clamp = v => {
-    const s = Math.min(1, Math.max(0.004, v.i1 - v.i0));
-    v.i0 = Math.max(0, Math.min(N() - s, v.i0)); v.i1 = v.i0 + s;
+    const n = N();
+    // ⚠ 视窗 i0/i1 是【数据下标】（0..N），不是归一化 0..1！
+    // 之前误用 Math.min(1, span)，一次滚轮就把 1000 点的窗口压成 1 点，曲线变直线。
+    const s = Math.min(n, Math.max(4, v.i1 - v.i0));   // 视窗至少 4 个点，最多整圈
+    v.i0 = Math.max(0, Math.min(n - s, v.i0)); v.i1 = v.i0 + s;
   };
   const zoomAt = (v, f, k) => {
     const at = v.i0 + f * (v.i1 - v.i0);
     v.i0 = at - (at - v.i0) * k; v.i1 = at + (v.i1 - at) * k; clamp(v);
   };
-  cv.onwheel = e => { e.preventDefault(); const c = getCfg(); if (!c) return; zoomAt(c.view, frac(e.clientX), e.deltaY > 0 ? 1.2 : 1 / 1.2); onView && onView(); };
+  // 滚轮：Ctrl/⌘ + 滚轮 = 图表缩放；普通滚轮【不拦截】，让页面正常滚动。
+  // （遥测图上直接滚轮缩放是 Garage61 的做法，但用户反馈与翻页冲突，改成按键组合）
+  cv.onwheel = e => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    const c = getCfg(); if (!c) return;
+    zoomAt(c.view, frac(e.clientX), e.deltaY > 0 ? 1.2 : 1 / 1.2);
+    onView && onView();
+  };
   cv.onpointerdown = e => {
     cv.setPointerCapture(e.pointerId); pointers.set(e.pointerId, e.clientX);
     if (pointers.size === 2) {
@@ -1232,6 +1247,40 @@ function bindTraceChart(cv, getCfg, onView) {
   cv.onpointerup = end; cv.onpointercancel = end;
   cv.onpointerleave = () => { const c = getCfg(); if (c) { c.hoverIdx = null; pan = null; onView && onView(); } };
   cv.ondblclick = () => { const c = getCfg(); if (c) { c.view.i0 = 0; c.view.i1 = N(); onView && onView(); } };
+}
+/* 图表缩放工具条：注入图表头部容器（holder），提供 缩小 / 复位 / 放大。
+   普通滚轮不再缩放（让位给页面滚动），缩放靠 Ctrl+滚轮、双指、双击复位、或这三个按钮。 */
+function chartTools(holder, cv, getCfg, onView) {
+  if (!holder || !cv) return;
+  if (holder.querySelector('.ctbtn')) return;             // 只注入一次
+  holder.classList.add('ctwrap');
+  const mark = document.createElement('span');
+  mark.className = 'ctmark';
+  mark.title = 'Ctrl/⌘ + 滚轮 = 缩放，普通滚轮 = 翻页；双击图 = 复位';
+  mark.textContent = 'Ctrl+滚轮缩放 · 双击复位';
+  holder.appendChild(mark);
+  const group = document.createElement('span');
+  group.className = 'ctgroup';
+  group.innerHTML = '<button class="ctbtn" data-z="-1" title="缩小">−</button>' +
+    '<button class="ctbtn" data-z="0" title="复位视图">⤢</button>' +
+    '<button class="ctbtn" data-z="1" title="放大">＋</button>';
+  holder.appendChild(group);
+  holder.addEventListener('click', e => {
+    const b = e.target.closest ? e.target.closest('.ctbtn') : null;
+    if (!b) return;
+    const c = getCfg(); if (!c || !c.series || !c.series[0] || !c.series[0].data) return;
+    const n = c.series[0].data.length - 1, v = c.view;
+    const z = b.dataset.z;
+    if (z === '0') { v.i0 = 0; v.i1 = n; }
+    else {
+      const at = (v.i0 + v.i1) / 2;
+      const k = z === '1' ? 1 / 1.6 : 1.6;
+      v.i0 = at - (at - v.i0) * k; v.i1 = at + (v.i1 - at) * k;
+      const s = Math.min(n, Math.max(4, v.i1 - v.i0));
+      v.i0 = Math.max(0, Math.min(n - s, v.i0)); v.i1 = v.i0 + s;
+    }
+    onView && onView();
+  });
 }
 
 /* ================================================================

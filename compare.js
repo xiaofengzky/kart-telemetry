@@ -180,6 +180,8 @@
     };
     drawTraces(cv, cfg);
     bindTraceChart(cv, () => cfg, () => drawTraces(cv, cfg));
+    const h3 = cv.closest(".card") ? cv.closest(".card").querySelector("h3") : null;
+    if (h3) chartTools(h3, cv, () => cfg, () => drawTraces(cv, cfg));
   }
   function drawSpd() {
     const cv = document.getElementById('cvSpd'); if (!cv || !cmp) return;
@@ -204,6 +206,8 @@
     };
     drawTraces(cv, cfg);
     bindTraceChart(cv, () => cfg, () => drawTraces(cv, cfg));
+    const h3 = cv.closest(".card") ? cv.closest(".card").querySelector("h3") : null;
+    if (h3) chartTools(h3, cv, () => cfg, () => drawTraces(cv, cfg));
   }
 
   /* 每个通道一张图，两条线叠加（Garage61 风格） */
@@ -247,6 +251,8 @@
       };
       drawTraces(cv, cfg);
       bindTraceChart(cv, () => cfg, () => { drawTraces(cv, cfg); });
+      const head = cv.closest(".chcard") ? cv.closest(".chcard").querySelector(".chart-head") : null;
+      if (head) chartTools(head, cv, () => cfg, () => drawTraces(cv, cfg));
     }
   }
 

@@ -138,6 +138,8 @@
       };
       drawTraces(cv, cfg);
       bindTraceChart(cv, () => cfg, () => drawTraces(cv, cfg));
+      const head = cv.closest('.chcard') ? cv.closest('.chcard').querySelector('.chart-head') : null;
+      if (head) chartTools(head, cv, () => cfg, () => drawTraces(cv, cfg));
     }
   }
   /* #rrggbb + alpha → rgba() */
