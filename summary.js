@@ -123,6 +123,15 @@
       </div>
 
       <div class="card">
+        <h3>🛰 赛道走线总览 <span class="cunit">每圈一条彩线，弯前分叉越开 = 走线/刹车越不一致</span></h3>
+        <div class="summap"><canvas id="sumCv"></canvas></div>
+        <div class="sumlegend">${a.full.map(l => `<span class="lg"><i style="background:${cmpColor(l.index)}"></i>#${l.index}</span>`).join('')}
+          <span class="lg"><i style="background:#e10600;border-radius:50%"></i>刹车点</span></div>
+        <p class="chint">每条线是一圈的走线。线在弯前<b>分叉越开</b>，说明刹车点/走线每圈都不一样——这是稳定性丢时间的直接原因。
+          把线收敛到同一条，圈速自然就稳了。想细看走线，去 <a href="track.html" style="color:var(--blue)">赛道图</a> 叠加对比。</p>
+      </div>
+
+      <div class="card">
         <h3>🏎 弯道与驾驶习惯</h3>
         <div class="evwrap">
           <div class="evcol">
@@ -172,6 +181,14 @@
         location.href = 'ideal.html';
       };
     });
+
+    /* 赛道走线总览：每圈一条线 + 刹车点红点标记 */
+    const sumCv = document.getElementById('sumCv');
+    if (sumCv && a.full.length >= 1) {
+      const markers = [];
+      if (bc) markers.push({ pct: bc.progress, color: '#e10600', r: 5, label: `刹车点 ±${bc.std.toFixed(1)}%` });
+      trackSketch(sumCv, s, { base: 'dark', laps: a.full.map(l => l.index), markers, corners: true });
+    }
   }
 
   /* 赛段涵盖弯角（给 S1/S2/S3 用）：T3–T7 / T5 / — */

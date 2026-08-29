@@ -1027,9 +1027,58 @@ function trackSketch(cv, s, opts = {}) {
     g.strokeStyle = color; g.lineWidth = width; g.globalAlpha = alpha == null ? 1 : alpha;
     g.lineCap = 'round'; g.lineJoin = 'round'; g.stroke(); g.globalAlpha = 1;
   };
-  // 底图：按速度着色（蓝=慢 → 红=快），和主赛道图一致
-  for (let i = 1; i < pts.length; i++) {
-    stroke(i - 1, i, speedColor((pts[i].v - vmin) / vspan), opts.thin ? 2 : 3, .9);
+  // 底图：默认按速度着色（蓝=慢 → 红=快），base:'dark' 则只画轨道轮廓（多圈走线对比时用）
+  const base = opts.base || 'speed';
+  if (base === 'dark') {
+    g.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const x = X(pts[i]), y = Y(pts[i]);
+      i === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+    }
+    g.strokeStyle = 'rgba(232,236,244,.30)'; g.lineWidth = 2.2;
+    g.lineCap = 'round'; g.lineJoin = 'round'; g.stroke();
+  } else {
+    for (let i = 1; i < pts.length; i++) {
+      stroke(i - 1, i, speedColor((pts[i].v - vmin) / vspan), opts.thin ? 2 : 3, .9);
+    }
+  }
+  // 多圈走线叠加：每圈一条线，颜色=圈号，线越乱说明走线越不稳定
+  const laps = opts.laps || [];
+  if (laps.length) {
+    const al = laps.length > 6 ? .42 : .68;
+    const lw = laps.length > 8 ? 1.3 : 1.7;
+    for (const li of laps) {
+      const l = s.analysis.full.find(x => x.index === li);
+      if (!l) continue;
+      const tr = lapTrace(s, l, 'speed', Math.min(N, 260));
+      g.beginPath();
+      for (let i = 0; i < tr.length; i++) {
+        const x = X(tr[i]), y = Y(tr[i]);
+        i === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+      }
+      g.strokeStyle = cmpColor(li); g.lineWidth = lw; g.globalAlpha = al;
+      g.lineCap = 'round'; g.lineJoin = 'round'; g.stroke();
+    }
+    g.globalAlpha = 1;
+  }
+  // 位置标记（如刹车点）：圆点 + 白边 + 小标签
+  const mks = opts.markers || [];
+  for (const mk of mks) {
+    const i = Math.min(pts.length - 1, Math.max(0, Math.round(mk.pct / 100 * N)));
+    const x = X(pts[i]), y = Y(pts[i]);
+    const r = mk.r || 4.5;
+    g.beginPath(); g.arc(x, y, r, 0, 7);
+    g.fillStyle = mk.color || '#e10600'; g.fill();
+    g.strokeStyle = 'rgba(255,255,255,.92)'; g.lineWidth = 1.3; g.stroke();
+    if (mk.label) {
+      g.font = '600 10px system-ui,sans-serif';
+      g.textAlign = 'left'; g.textBaseline = 'bottom';
+      const tw = g.measureText(mk.label).width;
+      const lx = x + r + 3, ly = y - r - 2;
+      g.fillStyle = 'rgba(11,13,18,.88)';
+      g.fillRect(lx - 2, ly - 10, tw + 4, 13);
+      g.fillStyle = '#fff'; g.fillText(mk.label, lx, ly + .5);
+    }
   }
   // 起终点
   if (pts.length) {
