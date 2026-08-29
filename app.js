@@ -586,9 +586,17 @@ function speedColor(t) {
 
 /* ---------- 地图 ---------- */
 function initMap() {
-  // scrollWheelZoom:false —— 地图上滚轮直接滚页面（用户反馈"地图上滚轮动不了"）。
-  // 地图缩放用左下角 +/- 按钮、拖拽或双指捏合。
+  // scrollWheelZoom:false —— 普通滚轮留给页面滚动（用户反馈"地图上滚轮动不了页面"）。
+  // 地图缩放：Ctrl/⌘+滚轮、左下角 +/- 按钮、双击、双指捏合。
   map = L.map('map', { zoomControl: false, attributionControl: true, scrollWheelZoom: false }).setView([30.55, 114.2], 15);
+  // Ctrl/⌘ + 滚轮 = 缩放地图（与曲线图交互一致）
+  map.on('wheel', e => {
+    const oe = e.originalEvent;
+    if (!(oe.ctrlKey || oe.metaKey)) return;      // 普通滚轮不拦截，页面正常滚动
+    oe.preventDefault();
+    const z = map.getZoom() + (oe.deltaY > 0 ? -1 : 1);
+    if (z >= map.getMinZoom() && z <= map.getMaxZoom()) map.setZoom(z, { animate: true });
+  });
   // 全部免 API key 的公开瓦片源
   satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Esri' });
   darkLayer = L.tileLayer('https://cartodb-basemaps-a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', { maxZoom: 19, subdomains: 'abcd', attribution: 'CARTO' });

@@ -591,9 +591,17 @@ function speedColor(t) {
 
 /* ---------- 地图 ---------- */
 function initMap() {
-  // scrollWheelZoom:false —— 地图上滚轮直接滚页面（用户反馈"地图上滚轮动不了"）。
-  // 地图缩放用左下角 +/- 按钮、拖拽或双指捏合。
+  // scrollWheelZoom:false —— 普通滚轮留给页面滚动（用户反馈"地图上滚轮动不了页面"）。
+  // 地图缩放：Ctrl/⌘+滚轮、左下角 +/- 按钮、双击、双指捏合。
   map = L.map('map', { zoomControl: false, attributionControl: true, scrollWheelZoom: false }).setView([30.55, 114.2], 15);
+  // Ctrl/⌘ + 滚轮 = 缩放地图（与曲线图交互一致）
+  map.on('wheel', e => {
+    const oe = e.originalEvent;
+    if (!(oe.ctrlKey || oe.metaKey)) return;      // 普通滚轮不拦截，页面正常滚动
+    oe.preventDefault();
+    const z = map.getZoom() + (oe.deltaY > 0 ? -1 : 1);
+    if (z >= map.getMinZoom() && z <= map.getMaxZoom()) map.setZoom(z, { animate: true });
+  });
   // 全部免 API key 的公开瓦片源
   satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Esri' });
   darkLayer = L.tileLayer('https://cartodb-basemaps-a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', { maxZoom: 19, subdomains: 'abcd', attribution: 'CARTO' });
@@ -993,6 +1001,30 @@ function idealLap(s, segCount = 50, laps = null) {
   };
 }
 
+/* ---------- 理论走线（Optimal Lap 的赛道轨迹） ----------
+   把赛道按进度切成 segCount 段，每段取「该段最快」来源圈的实际轨迹拼起来，
+   得到一条"理论最优走线"（金色虚线画在地图上）。
+   注意：各段来自不同圈，拼接处可能有小跳变，但能直观看出最优路径大致长什么样。 */
+function idealTrackTrace(s, segCount = 50) {
+  const idl = idealLap(s, segCount);
+  if (!idl) return [];
+  const cum = s.analysis.cum;
+  const out = [];
+  const perSeg = 8;                                  // 每段采 8 个点
+  for (const sg of idl.segs) {
+    const lap = s.analysis.full.find(l => l.index === sg.lap);
+    if (!lap) continue;
+    const A = lap.startIdx, B = lap.endIdx, D = lap.distance_m;
+    for (let k = 0; k < perSeg; k++) {
+      const d = sg.from / 100 * D + (sg.to - sg.from) / 100 * D * k / perSeg;
+      const target = cum[A] + d;
+      let ti = A; while (ti < B && cum[ti] < target) ti++;
+      out.push([s.points[ti].lat, s.points[ti].lon]);
+    }
+  }
+  return out;
+}
+
 /* ---------- 跨页会话管理 ----------
    数据存在 IndexedDB，但「当前选中哪个会话」要在页面间传递，用 localStorage。 */
 const CUR_KEY = 'kart.curSessionId';
@@ -1137,9 +1169,10 @@ function drawTraces(cv, cfg) {
       ctx.lineTo(sx(i1), sy(cfg.zeroLine ? 0 : yMin)); ctx.closePath(); ctx.fill();
     }
     ctx.strokeStyle = s.color; ctx.lineWidth = s.width || 1.7; ctx.lineJoin = 'round';
+    if (s.dash) ctx.setLineDash(s.dash); else ctx.setLineDash([]);
     ctx.beginPath();
     for (let i = i0; i <= i1; i++) { const x = sx(i), y = sy(s.data[i]); i === i0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
-    ctx.stroke();
+    ctx.stroke(); ctx.setLineDash([]);
   }
   ctx.restore();
   // 左轴刻度

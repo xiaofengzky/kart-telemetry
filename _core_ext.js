@@ -139,6 +139,30 @@ function idealLap(s, segCount = 50, laps = null) {
   };
 }
 
+/* ---------- 理论走线（Optimal Lap 的赛道轨迹） ----------
+   把赛道按进度切成 segCount 段，每段取「该段最快」来源圈的实际轨迹拼起来，
+   得到一条"理论最优走线"（金色虚线画在地图上）。
+   注意：各段来自不同圈，拼接处可能有小跳变，但能直观看出最优路径大致长什么样。 */
+function idealTrackTrace(s, segCount = 50) {
+  const idl = idealLap(s, segCount);
+  if (!idl) return [];
+  const cum = s.analysis.cum;
+  const out = [];
+  const perSeg = 8;                                  // 每段采 8 个点
+  for (const sg of idl.segs) {
+    const lap = s.analysis.full.find(l => l.index === sg.lap);
+    if (!lap) continue;
+    const A = lap.startIdx, B = lap.endIdx, D = lap.distance_m;
+    for (let k = 0; k < perSeg; k++) {
+      const d = sg.from / 100 * D + (sg.to - sg.from) / 100 * D * k / perSeg;
+      const target = cum[A] + d;
+      let ti = A; while (ti < B && cum[ti] < target) ti++;
+      out.push([s.points[ti].lat, s.points[ti].lon]);
+    }
+  }
+  return out;
+}
+
 /* ---------- 跨页会话管理 ----------
    数据存在 IndexedDB，但「当前选中哪个会话」要在页面间传递，用 localStorage。 */
 const CUR_KEY = 'kart.curSessionId';
@@ -283,9 +307,10 @@ function drawTraces(cv, cfg) {
       ctx.lineTo(sx(i1), sy(cfg.zeroLine ? 0 : yMin)); ctx.closePath(); ctx.fill();
     }
     ctx.strokeStyle = s.color; ctx.lineWidth = s.width || 1.7; ctx.lineJoin = 'round';
+    if (s.dash) ctx.setLineDash(s.dash); else ctx.setLineDash([]);
     ctx.beginPath();
     for (let i = i0; i <= i1; i++) { const x = sx(i), y = sy(s.data[i]); i === i0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
-    ctx.stroke();
+    ctx.stroke(); ctx.setLineDash([]);
   }
   ctx.restore();
   // 左轴刻度

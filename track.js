@@ -1,5 +1,9 @@
-/* 赛道图页：卫星图 + 速度热力着色 + 弯角标注 + 弯角明细表 + 场地对齐 */
+/* 赛道图页：卫星图 + 速度热力着色 + 多圈走线对比 + 理论走线极限 + 弯角明细表 + 场地对齐 */
 (function () {
+  let lapSel = null;          // 选中的走线圈（Set of lap index）
+  let showIdeal = true;       // 显示理论走线极限
+  let lapOverlay = null;      // L.layerGroup 走线叠加层
+
   function render() {
     const s = curSession(), box = document.getElementById('content');
     if (!s) {
@@ -10,6 +14,11 @@
     drawTrack(s);
     const a = s.analysis;
     document.getElementById('mapBadge').textContent = '卫星图 · ' + s.name;
+    // 走线对比状态初始化：默认最快圈 + 理论走线
+    if (!lapSel) lapSel = new Set(a.full.length ? [a.best ? a.best.index : a.full[0].index] : []);
+    lapSel = new Set([...lapSel].filter(i => a.full.some(l => l.index === i)));
+    if (!lapSel.size) lapSel = new Set(a.full.length ? [a.best ? a.best.index : a.full[0].index] : []);
+    drawLapOverlays(s);
 
     const cen = centroidPlot(s);
     const al = document.getElementById('alignLat'), ao = document.getElementById('alignLon');
@@ -29,6 +38,18 @@
           <div class="k">最高横向G</div></div>
         <div class="statbox"><div class="v">${(a.corners.reduce((t, c) => t + c.speed_loss, 0) / (a.corners.length || 1)).toFixed(1)}</div>
           <div class="k">平均每个弯损失 km/h</div></div>
+      </div>
+
+      <div class="card">
+        <h3>走线对比 <span class="cunit">每圈一条线：颜色=圈，灰色=未选中，金色虚线=理论走线极限</span></h3>
+        <div id="trackLapChips" class="lapchips"></div>
+        <div class="crow">
+          <button class="pbtn ${showIdeal ? 'on' : ''}" id="idealToggle" style="--c:#e3a008">✨ 理论走线极限</button>
+          <button class="pbtn" id="tlAll">全选</button>
+          <button class="pbtn" id="tlBest">只看最快圈</button>
+        </div>
+        <p class="chint"><b>理论走线极限</b> = 把赛道分成 50 小段，每段取你跑得最快那一次的实际轨迹拼起来（金色虚线），
+          表示"理论上最优的路径"。对比你各圈的走线，能看到哪个弯你走得偏宽、哪个弯切早了——走线差异是圈速差异的最大来源。</p>
       </div>
 
       <div class="card">
@@ -54,6 +75,62 @@
           当前场地中心：<b>${cen.lat.toFixed(5)}, ${cen.lon.toFixed(5)}</b>
         </p>
       </div>`;
+    bindTrackLaps(s);
+  }
+
+  /* ---------- 多圈走线叠加 ---------- */
+  function drawLapOverlays(s) {
+    if (lapOverlay) map.removeLayer(lapOverlay);
+    lapOverlay = L.layerGroup().addTo(map);
+    const a = s.analysis, off = s.offset;
+    // 每圈一条走线（高对比权重+提到最上层，避免被基础速度热力遮住）
+    for (const l of a.full) {
+      const on = lapSel.has(l.index);
+      const line = [];
+      const dec = Math.max(1, Math.floor((l.endIdx - l.startIdx) / 1800));
+      for (let i = l.startIdx; i <= l.endIdx; i += dec) {
+        const p = s.points[i];
+        line.push([p.lat + off.dLat, p.lon + off.dLon]);
+      }
+      if (line.length > 1) {
+        const path = L.polyline(line, {
+          color: on ? cmpColor(l.index) : '#3d4b5c',
+          weight: on ? 3.6 : 1.2,
+          opacity: on ? 1 : .35
+        }).addTo(lapOverlay);
+        if (on) path.setAttribute('stroke-linecap', 'round');
+      }
+    }
+    // 理论走线极限（金色虚线，最显眼）
+    if (showIdeal && a.full.length >= 2) {
+      const tr = idealTrackTrace(s, 50);
+      if (tr.length > 1) {
+        const gold = L.polyline(tr.map(p => [p[0] + off.dLat, p[1] + off.dLon]), {
+          color: '#ffd23f', weight: 3.2, dashArray: '7 5', opacity: 1, lineCap: 'round'
+        }).addTo(lapOverlay);
+        gold.setAttribute('stroke-linecap', 'round');
+      }
+    }
+    // 把走线叠加层提到最上层（盖在基础速度热力 + 瓦片之上）
+    if (lapOverlay && lapOverlay.getLayers().length) {
+      lapOverlay.bringToFront();
+    }
+  }
+  function bindTrackLaps(s) {
+    const box = document.getElementById('trackLapChips');
+    if (!box) return;
+    const a = s.analysis;
+    renderLapChips(box, a.full, [...lapSel], i => {
+      if (lapSel.has(i)) { if (lapSel.size > 1) lapSel.delete(i); } else lapSel.add(i);
+      box.querySelectorAll('.lapchip').forEach(c => c.classList.toggle('on', lapSel.has(+c.dataset.lap)));
+      drawLapOverlays(s);
+    }, false);
+    const it = document.getElementById('idealToggle');
+    if (it) it.onclick = () => { showIdeal = !showIdeal; it.classList.toggle('on', showIdeal); drawLapOverlays(s); };
+    const all = document.getElementById('tlAll');
+    if (all) all.onclick = () => { lapSel = new Set(a.full.map(l => l.index)); bindTrackLaps(s); drawLapOverlays(s); };
+    const best = document.getElementById('tlBest');
+    if (best) best.onclick = () => { lapSel = new Set(a.best ? [a.best.index] : [a.full[0].index]); bindTrackLaps(s); drawLapOverlays(s); };
   }
 
   function bindMapUI() {

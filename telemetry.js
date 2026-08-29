@@ -3,7 +3,7 @@
 (function () {
   const N = 1000;
   let sel = [];                 // 选中的圈 index（可多选叠加）
-  let show = { speed: true, thr: true, brk: true, steer: false, gear: false, rpm: false, latg: false, long: false };
+  let show = { speed: true, thr: true, brk: true, steer: false, gear: false, rpm: false, latg: false, long: false, ref: true };
   let tr = {};                  // tr[ch][lapIdx] = trace
   const views = {};
   const view = k => (views[k] || (views[k] = { i0: 0, i1: N }));
@@ -29,9 +29,10 @@
     if (!sel.length || !sel.every(i => a.full.some(l => l.index === i))) sel = [a.best ? a.best.index : a.full[0].index];
     build();
 
-    const chBtns = Object.keys(show).filter(ch => ir || (ch !== 'gear' && ch !== 'rpm' && ch !== 'steer'))
-      .map(ch => `<button class="pbtn ov ${show[ch] ? 'on' : ''}" data-ch="${ch}" style="--c:${CHANNELS[ch].color}">${CHANNELS[ch].name}</button>`).join('');
-    const chs = Object.keys(show).filter(ch => show[ch] && (ir || (ch !== 'gear' && ch !== 'rpm' && ch !== 'steer')));
+    const chBtns = Object.keys(show).filter(ch => ch !== 'ref' && (ir || (ch !== 'gear' && ch !== 'rpm' && ch !== 'steer')))
+      .map(ch => `<button class="pbtn ov ${show[ch] ? 'on' : ''}" data-ch="${ch}" style="--c:${CHANNELS[ch].color}">${CHANNELS[ch].name}</button>`).join('')
+      + `<button class="pbtn ov ${show.ref ? 'on' : ''}" data-ch="ref" style="--c:#e3a008" title="每个位置取你所有圈里速度最快那次的值（金色虚线）">✨ 自我基准参考</button>`;
+    const chs = Object.keys(show).filter(ch => ch !== 'ref' && show[ch] && (ir || (ch !== 'gear' && ch !== 'rpm' && ch !== 'steer')));
 
     box.innerHTML = `
       <div class="card">
@@ -117,6 +118,11 @@
         fill: sel.length === 1 ? hexA(c.color, .16) : null,
         forceZero: ch === 'thr' || ch === 'brk' || ch === 'speed' || ch === 'latg'
       })).filter(s2 => s2.data && s2.data.length);
+      // 自我基准参考线：每个位置取选中圈里「速度最快」那圈的本通道值（金色虚线）
+      if (show.ref) {
+        const ref = bestRef(ch);
+        if (ref) series.push({ name: '✨参考', color: '#e3a008', data: ref, width: 1.5, dash: [6, 4] });
+      }
       const cfg = {
         height: ch === 'speed' ? base + 50 : base,
         view: v, corners: s.analysis.corners, sectors: true,
@@ -146,6 +152,25 @@
   function hexA(hex, a) {
     const n = parseInt(hex.slice(1), 16);
     return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  }
+
+  /* 自我基准参考线：对每个位置（进度%），找选中圈中速度最快的那圈，取其指定通道的值。
+     速度通道 = 每个位置你跑出的最高速度；油门/刹车 = 那一次对应位置的表现。
+     这样"参考线"= 你曾经做到过的最优表现，作为改进方向。 */
+  function bestRef(ch) {
+    const s = curSession(); if (!s || !sel.length) return null;
+    const laps = sel.map(i => s.analysis.full.find(l => l.index === i)).filter(Boolean);
+    if (!laps.length) return null;
+    const N = 1000;
+    const spd = laps.map(l => lapTrace(s, l, 'speed', N));
+    const tr = ch === 'speed' ? spd : laps.map(l => lapTrace(s, l, ch, N));
+    const out = [];
+    for (let k = 0; k <= N; k++) {
+      let bi = 0;
+      for (let i = 1; i < spd.length; i++) if (spd[i][k].v > spd[bi][k].v) bi = i;
+      out.push(tr[bi][k].v);
+    }
+    return out;
   }
 
   document.addEventListener('DOMContentLoaded', () => bootPage('telemetry.html', () => { sel = []; render(); }));
