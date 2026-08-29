@@ -506,3 +506,38 @@ body.dragging .dzbig{border-color:var(--blue);background:#12283d}
   .ctmark{display:none}   /* 手机上提示太占地方，手势本身就是操作 */
   .ctbtn{min-width:34px;height:32px;font-size:15px}
 }
+
+/* ---- 总结页（教练诊断 / 提升机会 / 训练清单） ---- */
+.diag{font-size:13px;line-height:1.7;padding:10px 13px;border-radius:8px;margin-bottom:8px;border:1px solid}
+.diag:last-child{margin-bottom:0}
+.diag.warn{background:rgba(225,6,0,.10);border-color:rgba(225,6,0,.35);color:#ffb3ad}
+.diag.mid{background:rgba(227,160,8,.10);border-color:rgba(227,160,8,.35);color:#ffe0a1}
+.diag.good{background:rgba(63,185,80,.10);border-color:rgba(63,185,80,.35);color:#a7e6b4}
+.diag b{color:inherit}
+.secwrap{display:flex;flex-direction:column;gap:9px;padding:4px 0}
+.secrow{display:flex;align-items:center;gap:11px}
+.secname{flex:0 0 150px;font-size:13px}
+.secname b{font-size:14px}
+.secbar{flex:1;height:15px;background:var(--bg3);border-radius:4px;overflow:hidden}
+.secfill{display:block;height:100%;border-radius:4px;
+  background:linear-gradient(90deg,#e3a008,#e10600);transition:width .3s}
+.secfill.hot{box-shadow:0 0 10px rgba(225,6,0,.5)}
+.secval{flex:0 0 76px;text-align:right;font-size:12.5px;font-variant-numeric:tabular-nums;color:#ffb3ad}
+.tasklist{display:flex;flex-direction:column;gap:7px}
+.taskrow{display:flex;align-items:center;gap:12px;width:100%;text-align:left;
+  border:1px solid transparent;border-bottom:1px solid rgba(255,255,255,.05);
+  background:transparent;color:inherit;font:inherit;padding:9px 8px;border-radius:8px;cursor:pointer}
+button.taskrow:hover{background:rgba(255,255,255,.045)}
+button.taskrow[data-i]:active{background:rgba(59,158,255,.10)}
+.taskno{flex:0 0 30px;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  background:var(--bg3);border:1px solid var(--line);font-size:14px}
+.taskbody{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.taskbody b{font-size:13px}
+.taskgain{flex:0 0 auto;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.tasklap{flex:0 0 70px;text-align:right;font-size:11.5px;color:var(--mut)}
+.taskcta{flex:0 0 auto;font-size:11.5px;color:var(--blue);text-decoration:none;white-space:nowrap}
+.taskcta:hover{text-decoration:underline}
+@media(max-width:820px){
+  .secname{flex-basis:110px}
+  .tasklap{display:none}
+}

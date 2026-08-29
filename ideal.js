@@ -18,7 +18,7 @@
       const gain = Math.max(0, bl[k] - opt);
       const act = bl[k] || opt;
       const span = sectorSpan(s, k / 3 * 100, (k + 1) / 3 * 100);
-      return `<tr><td><b>S${k + 1}</b></td><td class="loc">${span}</td><td>${opt.toFixed(3)}s</td><td>${act.toFixed(3)}s</td>
+      return `<tr><td><b>S${k + 1}</b></td><td class="loc">${span}</td><td>${fmtTime(opt, 3)}</td><td>${fmtTime(act, 3)}</td>
         <td class="${deltaCls(gain)}">−${gain.toFixed(3)}s</td>
         <td>${(gain / Math.max(0.0001, idl.gain) * 100).toFixed(0)}%</td></tr>`;
     }).join('');
@@ -63,9 +63,9 @@
         建议<b>取消勾选</b>这些圈再看。</div>` : ''}
 
       <div class="stats">
-        <div class="statbox"><div class="v" style="color:var(--amber)">${idl.idealTime.toFixed(3)}s</div>
+        <div class="statbox"><div class="v" style="color:var(--amber)">${fmtTime(idl.idealTime, 3)}</div>
           <div class="k">极限圈速（理论最快）</div><div class="sub">${segCount} 段各取最快拼接</div></div>
-        <div class="statbox"><div class="v">${idl.bestTime.toFixed(3)}s</div>
+        <div class="statbox"><div class="v">${fmtTime(idl.bestTime, 3)}</div>
           <div class="k">实际最快圈</div><div class="sub">#${idl.perLap.reduce((m, p) => p.time_s < m.time_s ? p : m).lap}</div></div>
         <div class="statbox"><div class="v d-pos">−${idl.gain.toFixed(3)}s</div>
           <div class="k">理论可捡时间</div><div class="sub">${(idl.gain / idl.bestTime * 100).toFixed(2)}% 提升空间</div></div>
@@ -238,8 +238,8 @@
       </div>
       <div class="sdgrid">
         <div class="sdcell"><div class="k">这一段能捡</div><div class="v d-pos">−${sg.gain.toFixed(3)}s</div></div>
-        <div class="sdcell"><div class="k">这段最快（#${sg.lap}）</div><div class="v">${sg.time.toFixed(3)}s</div></div>
-        <div class="sdcell"><div class="k">你最快圈 #${bestLap.lap}</div><div class="v">${myT.toFixed(3)}s</div></div>
+        <div class="sdcell"><div class="k">这段最快（#${sg.lap}）</div><div class="v">${fmtTime(sg.time, 3)}</div></div>
+        <div class="sdcell"><div class="k">你最快圈 #${bestLap.lap}</div><div class="v">${fmtTime(myT, 3)}</div></div>
         <div class="sdcell"><div class="k">最低速 #${sg.lap} / #${bestLap.lap}</div>
           <div class="v">${sf.vmin.toFixed(0)} <span class="mut">vs</span> ${st.vmin.toFixed(0)} km/h</div></div>
         <div class="sdcell"><div class="k">出段速度 #${sg.lap} / #${bestLap.lap}</div>
@@ -266,7 +266,7 @@
       return `<table class="ctab"><thead><tr><th>圈</th><th>圈速</th><th>最快段数</th><th>最快段占比</th></tr></thead><tbody>
         ${laps.map(l => {
         const mine = idl.segs.filter(sg => sg.lap === l.index).length;
-        return `<tr><td>#${l.index}</td><td>${l.time_s.toFixed(3)}s</td><td>${mine}</td>
+        return `<tr><td>#${l.index}</td><td>${fmtTime(l.time_s, 3)}</td><td>${mine}</td>
             <td>${(mine / segCount * 100).toFixed(0)}%</td></tr>`;
       }).join('')}</tbody></table>
         <p class="chint">圈数较多时只显示汇总，避免表格过宽。</p>`;
@@ -292,7 +292,7 @@
         return `<td class="${isBest ? 'best' : ''}" title="#${l.index} ${p0.toFixed(0)}–${p1.toFixed(0)}% · ${loc.sector} ${loc.label} · ${t.toFixed(3)}s">${t.toFixed(2)}</td>`;
       }).join('');
       const mine = idl.segs.filter(sg => sg.lap === l.index).length;
-      return `<tr><td class="lapno">#${l.index}</td><td class="lapt">${l.time_s.toFixed(3)}s</td>${tds}
+      return `<tr><td class="lapno">#${l.index}</td><td class="lapt">${fmtTime(l.time_s, 3)}</td>${tds}
         <td class="mine">${mine}</td></tr>`;
     }).join('');
     return `<table class="ctab mtx"><thead><tr><th>圈</th><th>圈速</th>${head}<th>最快段</th></tr></thead><tbody>${body}</tbody></table>

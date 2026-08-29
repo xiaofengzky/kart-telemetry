@@ -8,6 +8,14 @@
    X 轴统一用「圈内进度 %」重采样（Garage61 用的是距离，本质一样）：
    不同圈走线不同、总里程不同，按进度%才能让所有圈在同一根轴上对齐。
    VBO 没有踏板传感器，油门/刹车用纵向 G 推导（已在 UI 上标注量纲）。 */
+/* 时间显示：≥1 分钟用 mm:ss.mmm，不足 1 分钟直接秒（用户觉得"147.883s"很怪）。
+   差值（可捡时间/标准差等）请继续用秒，别套这个函数。 */
+function fmtTime(sec, dec = 3) {
+  if (sec == null || !isFinite(sec)) return '—';
+  if (sec < 60) return sec.toFixed(dec) + 's';
+  const m = Math.floor(sec / 60), s = sec - m * 60;
+  return m + ':' + s.toFixed(dec).padStart(dec + 3, '0');
+}
 const CHANNELS = {
   speed: { name: '速度', unit: 'km/h', color: '#3b9eff', axis: 'left', dec: 0 },
   thr: { name: '油门', unit: '%', color: '#2ecc71', axis: 'left', dec: 0 },
@@ -311,6 +319,7 @@ function setCurSession(id) { curId = id; saveCurId(id); }
 /* ---------- 页面导航 ---------- */
 const PAGES = [
   { file: 'index.html', name: '车库', icon: '🏠' },
+  { file: 'summary.html', name: '总结', icon: '🎯' },
   { file: 'laps.html', name: '圈速', icon: '⏱' },
   { file: 'telemetry.html', name: '遥测通道', icon: '📈' },
   { file: 'compare.html', name: '多圈对比', icon: '🔀' },
@@ -345,7 +354,7 @@ function updateSessionMeta() {
   if (!m) return;
   if (!s) { m.textContent = ''; return; }
   m.innerHTML = `<i class="src ${s.source === 'iracing' ? 'iracing' : 'vbo'}">${s.source === 'iracing' ? 'iRacing' : 'VBOX'}</i>
-    最快 <b>${s.analysis.best_time != null ? s.analysis.best_time.toFixed(2) + 's' : '-'}</b>
+    最快 <b>${s.analysis.best_time != null ? fmtTime(s.analysis.best_time, 2) : '-'}</b>
     · 极速 <b>${s.analysis.vmax.toFixed(0)}</b> km/h · ${esc(s.date)}`;
 }
 /* 各页面统一的启动流程：恢复数据 → 选中会话 → 渲染导航 */
@@ -658,7 +667,7 @@ function renderLapChips(box, laps, sel, onToggle, markWarn) {
   box.innerHTML = laps.map(l => {
     const warn = markWarn && median && l.time_s > median * 1.06;
     return `<button class="lapchip ${sel.includes(l.index) ? 'on' : ''} ${warn ? 'warn' : ''}" data-lap="${l.index}"
-      title="${warn ? '比中位圈慢 6% 以上，可能是出场圈/失误圈' : ''}">#${l.index}<span class="lt">${l.time_s.toFixed(2)}s</span></button>`;
+      title="${warn ? '比中位圈慢 6% 以上，可能是出场圈/失误圈' : ''}">#${l.index}<span class="lt">${fmtTime(l.time_s, 2)}</span></button>`;
   }).join('');
   box.onclick = e => {
     const b = e.target.closest ? e.target.closest('.lapchip') : null;

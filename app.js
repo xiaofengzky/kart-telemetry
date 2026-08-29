@@ -670,7 +670,7 @@ function renderSidebar() {
     el.className = 'sess' + (s.id === curId ? ' active' : '');
     el.innerHTML = `<div class="sname">${esc(s.name)}<span class="strack">${a.full.length} 圈 · ${s.source === 'iracing' ? '<i class="src iracing">iRacing</i>' : '<i class="src vbo">VBOX</i>'}</span></div>
       <div class="sdate">${esc(s.date)}</div>
-      <div class="sstat"><span>最快 <b>${a.best_time != null ? a.best_time.toFixed(2) : '-'}s</b></span>
+      <div class="sstat"><span>最快 <b>${a.best_time != null ? fmtTime(a.best_time, 2) : '-'}</b></span>
       <span>极速 <b>${a.vmax.toFixed(0)}</b></span><span>最高G <b>${Math.max(0, ...a.corners.map(c => c.max_g)).toFixed(2)}</b></span></div>`;
     el.onclick = () => selectSession(s.id);
     list.appendChild(el);
@@ -756,7 +756,7 @@ function renderDetail(s) {
   let adv = '';
   if (a.best) {
     adv = `<ul>
-      <li><b>整体节奏：</b>${worstSec ? `第 ${worstSec.sector} 段最不稳定（圈速标准差 ${worstSec.std_s.toFixed(2)}s）。` : ''}核心 ${a.full.length} 圈标准差仅 ${a.core_std.toFixed(2)}s，最快 ${a.best_time.toFixed(2)}s、核心均速 ${a.core_avg.toFixed(2)}s，差距 ${(a.core_avg - a.best_time).toFixed(2)}s。</li>
+      <li><b>整体节奏：</b>${worstSec ? `第 ${worstSec.sector} 段最不稳定（圈速标准差 ${worstSec.std_s.toFixed(2)}s）。` : ''}核心 ${a.full.length} 圈标准差仅 ${a.core_std.toFixed(2)}s，最快 ${fmtTime(a.best_time, 2)}、核心均速 ${fmtTime(a.core_avg, 2)}，差距 ${(a.core_avg - a.best_time).toFixed(2)}s。</li>
       <li><b>最大波动区：</b>${worst ? `赛道进度 ${worst.progress_pct}% 附近速度每圈差 ${worst.std} km/h，走线/刹车点不固定，是最容易捡时间的地方。` : '数据较一致。'}</li>
       <li><b>丢速度最多的弯：</b>${ic.map(c => `C${c.id} 损失 ${c.speed_loss} km/h（入 ${c.entry_speed}→弯心 ${c.apex_speed}）`).join('；')}。出弯速度（${ic.map(c => c.exit_speed).join(' / ')}）还有空间，练"晚刹+弯心保速+早给油"。</li>
       <li><b>抓地利用：</b>最高横向G 达 ${maxG.toFixed(2)}；横向G 最低的 C${minGc ? minGc.id : '-'} 仅 ${minGc ? minGc.max_g.toFixed(2) : '-'}G，可稍晚刹车多带速。</li>
@@ -765,14 +765,14 @@ function renderDetail(s) {
     </ul>`;
   }
 
-  const lapOpts = a.full.map(l => `<option value="${l.index}" ${l.index === selIdx ? 'selected' : ''}>#${l.index} · ${l.time_s.toFixed(2)}s</option>`).join('');
+  const lapOpts = a.full.map(l => `<option value="${l.index}" ${l.index === selIdx ? 'selected' : ''}>#${l.index} · ${fmtTime(l.time_s, 2)}</option>`).join('');
 
   document.getElementById('detail').innerHTML = `
     <div class="summary">
       <div class="dhead"><h2>${esc(s.name)} <i class="src ${isIR ? 'iracing' : 'vbo'}">${isIR ? 'iRacing' : 'VBOX'}</i></h2><span class="dt">${esc(s.date)}</span></div>
       <div class="statgrid">
-        <div class="stat"><div class="v">${a.best_time != null ? a.best_time.toFixed(2) + 's' : '-'}</div><div class="k">最快圈</div></div>
-        <div class="stat"><div class="v">${a.core_avg.toFixed(2) + 's'}</div><div class="k">核心均速</div></div>
+        <div class="stat"><div class="v">${a.best_time != null ? fmtTime(a.best_time, 2) : '-'}</div><div class="k">最快圈</div></div>
+        <div class="stat"><div class="v">${fmtTime(a.core_avg, 2)}</div><div class="k">核心均速</div></div>
         <div class="stat"><div class="v" style="color:${a.gradeCol}">${a.grade}</div><div class="k">一致性</div></div>
         <div class="stat"><div class="v">${a.vmax.toFixed(0)}</div><div class="k">极速 km/h</div></div>
         <div class="stat"><div class="v">${maxG.toFixed(2)}</div><div class="k">最高G</div></div>

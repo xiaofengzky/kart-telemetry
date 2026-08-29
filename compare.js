@@ -60,15 +60,15 @@
     const ir = !!a.isIR;
     const la = lapByIdx(A), lb = lapByIdx(B);
     const diff = lb.time_s - la.time_s;
-    const opts = a.full.map(l => `<option value="${l.index}" ${l.index === A ? 'selected' : ''}>#${l.index} · ${l.time_s.toFixed(3)}s</option>`).join('');
-    const opts2 = a.full.map(l => `<option value="${l.index}" ${l.index === B ? 'selected' : ''}>#${l.index} · ${l.time_s.toFixed(3)}s</option>`).join('');
+    const opts = a.full.map(l => `<option value="${l.index}" ${l.index === A ? 'selected' : ''}>#${l.index} · ${fmtTime(l.time_s, 3)}</option>`).join('');
+    const opts2 = a.full.map(l => `<option value="${l.index}" ${l.index === B ? 'selected' : ''}>#${l.index} · ${fmtTime(l.time_s, 3)}</option>`).join('');
     const chBtns = Object.keys(show).filter(ch => ir || (ch !== 'gear' && ch !== 'rpm' && ch !== 'steer'))
       .map(ch => `<button class="pbtn ov ${show[ch] ? 'on' : ''}" data-ch="${ch}" style="--c:${CHANNELS[ch].color}">${CHANNELS[ch].name}</button>`).join('');
 
     box.innerHTML = `
       <div class="stats">
-        <div class="statbox"><div class="v">${la.time_s.toFixed(3)}s</div><div class="k">参考圈 #${A}</div></div>
-        <div class="statbox"><div class="v">${lb.time_s.toFixed(3)}s</div><div class="k">对比圈 #${B}</div></div>
+        <div class="statbox"><div class="v">${fmtTime(la.time_s, 3)}</div><div class="k">参考圈 #${A}</div></div>
+        <div class="statbox"><div class="v">${fmtTime(lb.time_s, 3)}</div><div class="k">对比圈 #${B}</div></div>
         <div class="statbox"><div class="v ${deltaCls(diff)}">${deltaTxt(diff)}</div><div class="k">${diff > 0 ? '#' + B + ' 更慢' : diff < 0 ? '#' + B + ' 更快' : '持平'}</div></div>
         <div class="statbox"><div class="v ${deltaCls(lb.max_speed - la.max_speed)}">${(lb.max_speed - la.max_speed) >= 0 ? '+' : ''}${(lb.max_speed - la.max_speed).toFixed(1)}</div>
           <div class="k">极速差 km/h</div></div>

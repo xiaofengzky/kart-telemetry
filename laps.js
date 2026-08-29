@@ -16,9 +16,9 @@
     box.innerHTML = `
       <div class="stats">
         <div class="statbox"><div class="v">${a.full.length}</div><div class="k">完整圈</div></div>
-        <div class="statbox"><div class="v">${a.best_time != null ? a.best_time.toFixed(3) + 's' : '-'}</div>
+        <div class="statbox"><div class="v">${a.best_time != null ? fmtTime(a.best_time, 3) : '-'}</div>
           <div class="k">最快圈 <span style="color:var(--mut)">#${a.best ? a.best.index : '-'}</span></div></div>
-        <div class="statbox"><div class="v">${a.core_avg.toFixed(3)}s</div><div class="k">核心均速</div>
+        <div class="statbox"><div class="v">${fmtTime(a.core_avg, 3)}</div><div class="k">核心均速</div>
           <div class="sub">去掉最快最慢后的平均</div></div>
         <div class="statbox"><div class="v" style="color:${a.gradeCol}">${a.grade}</div><div class="k">一致性</div>
           <div class="sub">标准差 ±${a.core_std}s</div></div>
@@ -37,9 +37,9 @@
       const st = l.sector_times || [0, 0, 0];
       return `<tr class="${l.index === (a.best ? a.best.index : -1) ? 'best' : ''}">
               <td><b>#${l.index}</b>${slow ? ' <span title="明显偏慢，可能是出场圈/失误圈" style="color:var(--amber)">⚠</span>' : ''}</td>
-              <td>${l.time_s.toFixed(3)}s</td>
+              <td>${fmtTime(l.time_s, 3)}</td>
               <td class="${deltaCls(d)}">${d < 0.0005 ? '最快' : deltaTxt(d)}</td>
-              <td>${st[0].toFixed(2)}s</td><td>${st[1].toFixed(2)}s</td><td>${st[2].toFixed(2)}s</td>
+              <td>${fmtTime(st[0], 2)}</td><td>${fmtTime(st[1], 2)}</td><td>${fmtTime(st[2], 2)}</td>
               <td>${l.max_speed.toFixed(1)}</td>
               <td>${m.minSpeed != null ? m.minSpeed.toFixed(1) : '-'}</td>
               <td>${m.brakeCount != null ? m.brakeCount : '-'}</td>
@@ -56,7 +56,7 @@
         <h3>分段表现 <span class="cunit">F1 风格三段赛段</span></h3>
         <table class="ctab"><thead><tr><th>赛段</th><th>平均</th><th>最快</th><th>波动 ±</th></tr></thead>
           <tbody>${a.sectors.map(s2 => `<tr>
-            <td><b>${s2.name || ('S' + s2.sector)}</b></td><td>${s2.mean_s.toFixed(3)}s</td><td>${s2.best_s.toFixed(3)}s</td>
+            <td><b>${s2.name || ('S' + s2.sector)}</b></td><td>${fmtTime(s2.mean_s, 3)}</td><td>${fmtTime(s2.best_s, 3)}</td>
             <td class="${s2.std_s > 0.5 ? 'd-pos' : 'd-zero'}">±${s2.std_s}s</td></tr>`).join('')}</tbody></table>
         <p class="chint">波动大的赛段说明这一段你的跑法不稳定，是最该固定下来的地方。想具体看 S1/S2/S3 里哪个弯慢，去 <a href="compare.html" style="color:var(--blue)">多圈对比</a> 或 <a href="telemetry.html" style="color:var(--blue)">遥测通道</a>（图上已标出 S1/S2/S3 分区）。</p>
       </div>` : ''}
@@ -83,7 +83,7 @@
       <div class="card">
         <h3>刹车 / 油门事件
           <select id="evSel" class="sbsel" style="min-width:150px;margin-left:8px">
-            ${sorted.map(l => `<option value="${l.index}" ${l.index === selLapIdx ? 'selected' : ''}>#${l.index} · ${l.time_s.toFixed(2)}s</option>`).join('')}
+            ${sorted.map(l => `<option value="${l.index}" ${l.index === selLapIdx ? 'selected' : ''}>#${l.index} · ${fmtTime(l.time_s, 2)}</option>`).join('')}
           </select>
         </h3>
         ${eventTable(ir)}
