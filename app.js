@@ -589,14 +589,15 @@ function initMap() {
   // scrollWheelZoom:false —— 普通滚轮留给页面滚动（用户反馈"地图上滚轮动不了页面"）。
   // 地图缩放：Ctrl/⌘+滚轮、左下角 +/- 按钮、双击、双指捏合。
   map = L.map('map', { zoomControl: false, attributionControl: true, scrollWheelZoom: false }).setView([30.55, 114.2], 15);
-  // Ctrl/⌘ + 滚轮 = 缩放地图（与曲线图交互一致）
-  map.on('wheel', e => {
-    const oe = e.originalEvent;
-    if (!(oe.ctrlKey || oe.metaKey)) return;      // 普通滚轮不拦截，页面正常滚动
-    oe.preventDefault();
-    const z = map.getZoom() + (oe.deltaY > 0 ? -1 : 1);
-    if (z >= map.getMinZoom() && z <= map.getMaxZoom()) map.setZoom(z, { animate: true });
-  });
+  // Ctrl/⌘ + 滚轮 = 缩放地图。
+  // ⚠ Leaflet 的 Map 事件里【没有 'wheel'】——map.on('wheel') 永远不会触发，
+  //   必须直接监听容器 DOM 的 wheel（且要 passive:false 才能 preventDefault）。
+  map.getContainer().addEventListener('wheel', e => {
+    if (!(e.ctrlKey || e.metaKey)) return;      // 普通滚轮不拦截，页面正常滚动
+    e.preventDefault();
+    const z = map.getZoom() + (e.deltaY > 0 ? -1 : 1);
+    if (z >= map.getMinZoom() && z <= map.getMaxZoom()) map.setZoom(z);   // 不用 animate：滚轮缩放要跟手
+  }, { passive: false });
   // 全部免 API key 的公开瓦片源
   satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Esri' });
   darkLayer = L.tileLayer('https://cartodb-basemaps-a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', { maxZoom: 19, subdomains: 'abcd', attribution: 'CARTO' });

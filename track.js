@@ -1,7 +1,7 @@
 /* 赛道图页：卫星图 + 速度热力着色 + 多圈走线对比 + 理论走线极限 + 弯角明细表 + 场地对齐 */
 (function () {
   let lapSel = null;          // 选中的走线圈（Set of lap index）
-  let showIdeal = true;       // 显示理论走线极限
+  let showIdeal = false;      // 理论走线极限（默认关，需要对比时再开）
   let lapOverlay = null;      // L.layerGroup 走线叠加层
 
   function render() {
@@ -15,9 +15,8 @@
     const a = s.analysis;
     document.getElementById('mapBadge').textContent = '卫星图 · ' + s.name;
     // 走线对比状态初始化：默认最快圈 + 理论走线
-    if (!lapSel) lapSel = new Set(a.full.length ? [a.best ? a.best.index : a.full[0].index] : []);
+    if (!lapSel) lapSel = new Set();   // 默认不叠走线，先看清按速度着色的赛道图
     lapSel = new Set([...lapSel].filter(i => a.full.some(l => l.index === i)));
-    if (!lapSel.size) lapSel = new Set(a.full.length ? [a.best ? a.best.index : a.full[0].index] : []);
     drawLapOverlays(s);
 
     const cen = centroidPlot(s);
@@ -83,37 +82,26 @@
     if (lapOverlay) map.removeLayer(lapOverlay);
     lapOverlay = L.layerGroup().addTo(map);
     const a = s.analysis, off = s.offset;
-    // 每圈一条走线（高对比权重+提到最上层，避免被基础速度热力遮住）
+    // ⚠ 不要 bringToFront / 不要盖住基础速度热力：用户主要看的是按速度着色的赛道图
+    // （L.layerGroup 也没有 bringToFront 方法，调用会抛异常导致 render() 中断）
     for (const l of a.full) {
-      const on = lapSel.has(l.index);
+      if (!lapSel.has(l.index)) continue;              // 只画勾选的圈，默认不干扰热力图
       const line = [];
       const dec = Math.max(1, Math.floor((l.endIdx - l.startIdx) / 1800));
       for (let i = l.startIdx; i <= l.endIdx; i += dec) {
         const p = s.points[i];
         line.push([p.lat + off.dLat, p.lon + off.dLon]);
       }
-      if (line.length > 1) {
-        const path = L.polyline(line, {
-          color: on ? cmpColor(l.index) : '#3d4b5c',
-          weight: on ? 3.6 : 1.2,
-          opacity: on ? 1 : .35
-        }).addTo(lapOverlay);
-        if (on) path.setAttribute('stroke-linecap', 'round');
-      }
+      if (line.length > 1) L.polyline(line, {
+        color: cmpColor(l.index), weight: 2.2, opacity: .8, lineCap: 'round'
+      }).addTo(lapOverlay);
     }
-    // 理论走线极限（金色虚线，最显眼）
+    // 理论走线极限（金色虚线，仅在需要对比时开启）
     if (showIdeal && a.full.length >= 2) {
       const tr = idealTrackTrace(s, 50);
-      if (tr.length > 1) {
-        const gold = L.polyline(tr.map(p => [p[0] + off.dLat, p[1] + off.dLon]), {
-          color: '#ffd23f', weight: 3.2, dashArray: '7 5', opacity: 1, lineCap: 'round'
-        }).addTo(lapOverlay);
-        gold.setAttribute('stroke-linecap', 'round');
-      }
-    }
-    // 把走线叠加层提到最上层（盖在基础速度热力 + 瓦片之上）
-    if (lapOverlay && lapOverlay.getLayers().length) {
-      lapOverlay.bringToFront();
+      if (tr.length > 1) L.polyline(tr.map(p => [p[0] + off.dLat, p[1] + off.dLon]), {
+        color: '#ffd23f', weight: 2.6, dashArray: '7 5', opacity: .85, lineCap: 'round'
+      }).addTo(lapOverlay);
     }
   }
   function bindTrackLaps(s) {
