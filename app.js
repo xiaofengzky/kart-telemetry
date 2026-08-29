@@ -54,73 +54,96 @@ function parseVBO(text) {
 }
 
 /* ================= iRacing .ibt 遥测 =================
-   iRacing 在 选项→Misc→Save telemetry data to disk 开启后，每场结束在
-   「文档/iRacing/telemetry」生成 .ibt 文件。它比 Racebobo .vbo 多出真实的
-   Throttle/Brake/SteeringWheelAngle/Gear/RPM 通道，且经纬度是精确 WGS84。 */
+   真实 .ibt 布局（与 iRacing 共享内存 header 同构，**小端** int32）：
+     header:  0=ver 4=status 8=tickRate 12=sessionInfoUpdate 16=sessionInfoLen
+              20=sessionInfoOffset 24=numVars 28=varHeaderOffset 32=numBuf 36=bufLen
+     varHeader（每项 144 字节）: +0 type  +4 offset  +8 count  +12 countAsTime/pad
+              +16 name[32]  +48 desc[64]  +112 unit[32]
+     类型: 0=char(1) 1=bool(1) 2=int(4) 3=bitField(4) 4=float(4) 5=double(8)
+     数据区: 起始 = sessionInfoOffset + sessionInfoLen，每条 tick = bufLen 字节，**无 tickCount 前缀**
+   sessionInfo 是 YAML（不是 JSON），含 TrackName / TrackDisplayName 等。 */
 function ibtBytesToString(buf, start, len) {
   let s = '';
   for (let i = 0; i < len; i++) { const c = buf[start + i]; if (!c) break; s += String.fromCharCode(c); }
   return s;
 }
+const IBT_SIZE = [1, 1, 4, 4, 4, 8];            // 各类型字节数
 function ibtReadVal(dv, buf, off, type) {
+  // 越界一律返回 null，绝不让 DataView 抛异常（不同版本 header 可能有偏差）
+  if (!(type >= 0 && type <= 5)) return null;
+  if (off < 0 || off + IBT_SIZE[type] > buf.byteLength) return null;
   switch (type) {
-    case 1: return buf[off];
-    case 2: return buf[off] !== 0;
-    case 3: return dv.getInt32(off);
-    case 4: return dv.getUint32(off);
-    case 5: return dv.getFloat32(off);
-    case 6: return dv.getFloat64(off);
+    case 0: return buf[off];                    // char
+    case 1: return buf[off] !== 0;              // bool
+    case 2: return dv.getInt32(off, true);      // int
+    case 3: return dv.getUint32(off, true);     // bitField
+    case 4: return dv.getFloat32(off, true);    // float
+    case 5: return dv.getFloat64(off, true);    // double
     default: return null;
   }
 }
-/* 解析 .ibt → { sessionInfo(JSON字符串), vars, ticks } */
+/* 需要的遥测通道（带备选名，兼容不同 iRacing 版本） */
+const IBT_FIELDS = {
+  t: ['SessionTime'],
+  speed: ['Speed'],
+  lat: ['Lat', 'WorldSpaceLatDeg', 'LapLat'],
+  lon: ['Lon', 'WorldSpaceLonDeg', 'LapLon'],
+  thr: ['Throttle'],
+  brk: ['Brake'],
+  gear: ['Gear'],
+  rpm: ['RPM'],
+  steer: ['SteeringWheelAngle'],
+  latA: ['LatAccel'],
+  lonA: ['LongAccel', 'LonAccel'],
+  lap: ['Lap'],
+  lapPct: ['LapDistPct']
+};
 function parseIBT(buf) {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  let off = 0;
-  const magic = ibtBytesToString(buf, 0, 12); off = 12;
-  dv.getInt32(off); off += 4;                                   // headerLen
-  const sessionInfoLen = dv.getInt32(off); off += 4;
-  const sessionInfo = ibtBytesToString(buf, off, sessionInfoLen); off += sessionInfoLen;
-  const varHeaderOffset = dv.getInt32(off); off += 4;
-  const numVars = dv.getInt32(off); off += 4;
-  dv.getInt32(off); off += 4;                                   // dataBufferSize
-  const numDataBuffers = dv.getInt32(off); off += 4;
-  let p = varHeaderOffset;
-  const vars = [];
+  const tickRate = dv.getInt32(8, true);
+  const siLen = dv.getInt32(16, true);
+  const siOffset = dv.getInt32(20, true);
+  const numVars = dv.getInt32(24, true);
+  const varHdrOff = dv.getInt32(28, true);
+  const bufLen = dv.getInt32(36, true);
+  if (!(siLen > 0 && siOffset > 0 && numVars > 0 && bufLen > 0)) throw new Error('不是有效的 .ibt（header 异常）');
+  const sessionInfo = ibtBytesToString(buf, siOffset, siLen);
+  // 变量表
+  const vars = {};
   for (let i = 0; i < numVars; i++) {
-    const name = ibtBytesToString(buf, p, 32); p += 32;
-    ibtBytesToString(buf, p, 32); p += 32;
-    ibtBytesToString(buf, p, 32); p += 32;
-    const type = dv.getInt32(p); p += 4;
-    const voff = dv.getInt32(p); p += 4;
-    const len = dv.getInt32(p); p += 4;
-    p += 1;
-    vars.push({ name, type, offset: voff, length: len });
+    const q = varHdrOff + i * 144;
+    if (q + 144 > buf.byteLength) break;
+    const name = ibtBytesToString(buf, q + 16, 32);
+    if (name) vars[name] = { type: dv.getInt32(q, true), offset: dv.getInt32(q + 4, true), count: dv.getInt32(q + 8, true) };
   }
-  const tickSize = vars.length ? (vars[vars.length - 1].offset + vars[vars.length - 1].length) : 0;
-  let d = p, buffers = 0;
+  const pick = names => { for (const n of names) if (vars[n]) return vars[n]; return null; };
+  // 兜底：不区分大小写精确匹配（个别版本大小写不一致）
+  const lower = {}; for (const n in vars) lower[n.toLowerCase()] = vars[n];
+  const pickCI = names => { for (const n of names) if (lower[n.toLowerCase()]) return lower[n.toLowerCase()]; return null; };
+  const F = {};
+  for (const k in IBT_FIELDS) F[k] = pick(IBT_FIELDS[k]) || pickCI(IBT_FIELDS[k]);
+  if (!F.lat || !F.lon) throw new Error('缺少经纬度通道（Lat/Lon）—— 该 .ibt 可能不是完整遥测录制');
+  // 数据区
+  const dataStart = siOffset + siLen;
+  const n = Math.max(0, Math.floor((buf.byteLength - dataStart) / bufLen));
+  if (!n) throw new Error('数据区为空');
+  const dec = Math.max(1, Math.ceil(n / 60000));   // 超长会话降采样，避免浏览器卡顿
   const ticks = [];
-  while (d + 4 <= buf.byteLength && buffers < numDataBuffers) {
-    const tickCount = dv.getInt32(d); d += 4;
-    if (tickCount < 0 || tickCount > 1e7) break;
-    for (let t = 0; t < tickCount; t++) {
-      if (d + tickSize > buf.byteLength) break;
-      const rec = {};
-      for (const v of vars) rec[v.name] = ibtReadVal(dv, buf, d + v.offset, v.type);
-      ticks.push(rec);
-      d += tickSize;
-    }
-    buffers++;
+  for (let i = 0; i < n; i += dec) {
+    const base = dataStart + i * bufLen;
+    const rec = {};
+    for (const k in F) rec[k] = F[k] ? ibtReadVal(dv, buf, base + F[k].offset, F[k].type) : null;
+    ticks.push(rec);
   }
-  return { magic, sessionInfo, vars, ticks };
+  return { sessionInfo, tickRate, varCount: Object.keys(vars).length, ticks, varNames: Object.keys(vars) };
 }
 /* iRacing ticks → 与 .vbo 相同的 points（附带真实踏板/档位/转速通道） */
 function ibtTicksToPoints(ticks) {
   const pts = [];
   let prevLat = null, prevLon = null, prevHdg = null;
   for (const tk of ticks) {
-    const lat = +tk.WorldSpaceLatDeg, lon = +tk.WorldSpaceLonDeg;
-    if (!isFinite(lat) || !isFinite(lon)) continue;
+    const lat = +tk.lat, lon = +tk.lon;
+    if (!isFinite(lat) || !isFinite(lon) || (lat === 0 && lon === 0)) continue;
     let hdg = null;
     if (prevLat != null) {
       // 精确坐标下用位置差分算航向（iRacing 的 Yaw 是相对赛道的，不能直接用）
@@ -130,23 +153,30 @@ function ibtTicksToPoints(ticks) {
     }
     pts.push({
       lat, lon,
-      vel: (+tk.Speed || 0) * 3.6,        // m/s → km/h
+      vel: (+tk.speed || 0) * 3.6,        // m/s → km/h
       hdg: hdg != null ? hdg : (prevHdg != null ? prevHdg : 0),
       h: null,
-      t: +tk.SessionTime || 0,
-      thr: +tk.Throttle || 0,             // 0-1
-      brk: +tk.Brake || 0,                // 0-1
-      gear: +tk.Gear || 0,
-      rpm: +tk.RPM || 0,
-      steer: +tk.SteeringWheelAngle || 0, // rad
-      latA: +tk.LatAccel || 0,            // m/s²
-      lonA: +tk.LonAccel || 0,            // m/s²
-      lap: +tk.Lap || 0,
-      lapPct: +tk.LapDistPct || 0
+      t: +tk.t || 0,
+      thr: +tk.thr || 0,                  // 0-1
+      brk: +tk.brk || 0,                  // 0-1
+      gear: +tk.gear || 0,
+      rpm: +tk.rpm || 0,
+      steer: +tk.steer || 0,              // rad
+      latA: +tk.latA || 0,                // m/s²
+      lonA: +tk.lonA || 0,                // m/s²
+      lap: +tk.lap || 0,
+      lapPct: +tk.lapPct || 0             // 0-1
     });
     prevLat = lat; prevLon = lon; prevHdg = hdg != null ? hdg : prevHdg;
   }
   return pts;
+}
+/* 从 sessionInfo(YAML) 提取赛道名 */
+function ibtTrackName(sessionInfo) {
+  if (!sessionInfo) return '';
+  const m = sessionInfo.match(/TrackDisplayName:\s*(.+)/)
+    || sessionInfo.match(/TrackName:\s*(.+)/);
+  return m ? m[1].trim() : '';
 }
 
 /* ---------- 分析 ---------- */
@@ -913,11 +943,11 @@ function loadIBT(file, onDone) {
       if (!r.ticks.length) { showLoadError('无法解析 .ibt（无数据）：' + file.name); return; }
       const pts = ibtTicksToPoints(r.ticks);
       if (pts.length < 50) { showLoadError('.ibt 有效数据点太少：' + file.name); return; }
-      // 从 session info 提取赛道名
-      let name = '';
-      try { name = (JSON.parse(r.sessionInfo).weekendInfo || {}).trackName || ''; } catch (e2) { }
+      // 从 session info(YAML) 提取赛道名
+      let name = ibtTrackName(r.sessionInfo);
       if (!name) name = file.name.replace(/\.ibt$/i, '');
-      const date = 'iRacing ' + (new Date()).toLocaleDateString('zh-CN');
+      const d = file.lastModified ? new Date(file.lastModified) : new Date();
+      const date = 'iRacing ' + d.toLocaleDateString('zh-CN') + ' ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
       const s = { id: Date.now() + '_' + SESSIONS.length, name, date, points: pts, source: 'iracing',
         offset: { dLat: 0, dLon: 0 }, analysis: analyze(pts) };
       SESSIONS.push(s);
