@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>赛道图 · Kart Telemetry</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="style.css?v=14">
+</head>
+<body class="mpage">
+<header class="topbar">
+  <div class="brand"><span class="dot"></span> KART<span class="accent">TELEMETRY</span></div>
+  <nav id="pagenav" class="pagenav"></nav>
+  <div class="grow"></div>
+  <button id="locateBtn" class="locatebtn" title="用浏览器定位显示你当前所在位置"><span class="btxt">📍 定位我</span></button>
+  <label class="dropbtn">+ 上传<input id="fileInput" type="file" accept=".vbo,.ibt" multiple></label>
+</header>
+
+<div class="pagewrap">
+  <div id="loaderr" style="display:none"></div>
+  <div id="sessbar" class="sessbar"></div>
+
+  <div class="card mapcard" style="padding:0;overflow:hidden">
+    <div class="maphead">
+      <h3 style="margin:0">赛道图 <span class="cunit">按速度着色：蓝=慢 → 红=快</span></h3>
+      <div class="grow"></div>
+      <button id="mmAlign" class="pbtn">对齐场地</button>
+      <button id="mmExpand" class="pbtn">⤢ 放大</button>
+    </div>
+    <div id="map" class="bigmap"></div>
+    <div class="mapbadge" id="mapBadge">赛道形状已绘制</div>
+    <div class="mypos" id="myPos"></div>
+    <div class="alignbox" id="alignBox">
+      <div class="atitle">对齐真实场地</div>
+      <div class="arow"><label>纬度</label><input id="alignLat" type="number" step="0.0001" placeholder="场地中心纬度"></div>
+      <div class="arow"><label>经度</label><input id="alignLon" type="number" step="0.0001" placeholder="场地中心经度"></div>
+      <div class="abtns">
+        <button id="applyAlign" class="mini">应用</button>
+        <button id="pickAlign" class="mini ghost">在图上点选</button>
+        <button id="resetAlign" class="mini ghost">重置</button>
+      </div>
+      <div class="anote" id="alignNote"></div>
+    </div>
+  </div>
+
+  <div id="content"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="core.js?v=14"></script>
+<script src="track.js?v=14"></script>
+</body>
+</html>

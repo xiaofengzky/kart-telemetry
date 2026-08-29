@@ -270,3 +270,155 @@ canvas.chart{width:100%;background:var(--bg);border:1px solid var(--line);border
   .locatebtn:hover{border-color:var(--line);color:var(--txt)}
   .chip:hover{opacity:1}
 }
+
+/* ================================================================
+   多页面架构（Garage61 风格：一个页面只干一件事）
+   ================================================================ */
+body.mpage{overflow:auto;height:auto}
+.mpage .topbar{position:sticky;top:0;z-index:200}
+.pagewrap{max-width:1200px;margin:0 auto;padding:16px 18px 64px}
+
+/* 顶部页面导航 */
+.pagenav{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
+.navitem{display:inline-flex;align-items:center;gap:5px;padding:6px 11px;border-radius:7px;
+  color:var(--mut);text-decoration:none;font-size:12.5px;border:1px solid transparent;
+  white-space:nowrap;transition:.14s;-webkit-tap-highlight-color:transparent}
+.navitem:hover{background:var(--bg3);color:var(--txt)}
+.navitem.on{background:#12283d;border-color:var(--blue);color:#fff}
+.navitem .ni{font-size:13px;line-height:1}
+
+/* 会话条 */
+.sessbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  background:var(--bg2);border:1px solid var(--line);border-radius:9px;
+  padding:9px 12px;margin-bottom:14px}
+.sbsel{background:var(--bg3);color:var(--txt);border:1px solid var(--line);
+  border-radius:7px;padding:6px 10px;font-size:13px;max-width:100%;min-width:220px}
+.sbmeta{color:var(--mut);font-size:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.sbmeta b{color:var(--txt);font-variant-numeric:tabular-nums}
+.sbempty{color:var(--mut);font-size:12.5px}
+.sbempty a{color:var(--blue);text-decoration:none}
+.sbempty a:hover{text-decoration:underline}
+
+/* 卡片 */
+.card{background:var(--bg2);border:1px solid var(--line);border-radius:10px;
+  padding:14px 16px;margin-bottom:14px}
+.card>h3{margin:0 0 4px;font-size:13px;font-weight:700;letter-spacing:.3px;
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.card>.chint{color:var(--mut);font-size:11.5px;margin:0 0 12px;line-height:1.6}
+
+/* 指标小卡 */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(126px,1fr));gap:10px;margin-bottom:14px}
+.statbox{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:11px 13px}
+.statbox .v{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.15}
+.statbox .k{font-size:11px;color:var(--mut);margin-top:3px}
+.statbox .sub{font-size:10.5px;color:var(--mut);margin-top:2px}
+
+/* 时间增减：丢时间=红，捡时间=绿 */
+.d-pos{color:#ff6b6b;font-weight:700;font-variant-numeric:tabular-nums}
+.d-neg{color:var(--green);font-weight:700;font-variant-numeric:tabular-nums}
+.d-zero{color:var(--mut);font-variant-numeric:tabular-nums}
+
+/* 通道图网格（遥测页：每个通道一张图，可多选） */
+.chgrid{display:flex;flex-direction:column;gap:12px}
+.chart-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.chart-head .cname{font-size:12.5px;font-weight:700}
+.chart-head .cunit{font-size:11px;color:var(--mut)}
+.chart-head .grow{flex:1}
+
+/* 圈选择 chips */
+.lapchips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.lapchip{border:1px solid var(--line);background:var(--bg3);color:var(--mut);
+  border-radius:14px;padding:4px 11px;font-size:12px;cursor:pointer;transition:.14s;
+  font-variant-numeric:tabular-nums}
+.lapchip:hover{color:var(--txt)}
+.lapchip.on{background:#12283d;border-color:var(--blue);color:#fff}
+.lapchip.warn::after{content:' ⚠';color:var(--amber)}
+.lapchip .lt{color:inherit;opacity:.65;font-size:11px;margin-left:4px}
+
+/* 分段条形（极限圈速） */
+.segrow{display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.segrow:last-child{border-bottom:none}
+.segrow .segno{width:52px;color:var(--mut);font-size:11.5px;font-variant-numeric:tabular-nums}
+.segrow .segbar{flex:1;height:14px;background:var(--bg3);border-radius:3px;overflow:hidden;position:relative}
+.segrow .segfill{height:100%;background:linear-gradient(90deg,#e10600,#ff6b6b);border-radius:3px}
+.segrow .segval{width:78px;text-align:right;font-size:12px;font-variant-numeric:tabular-nums}
+.segrow .seglap{width:44px;text-align:right;font-size:11px;color:var(--mut)}
+
+/* 提示条 */
+.notice{background:#1b1407;border:1px solid #3a2c0c;border-left:3px solid var(--amber);
+  border-radius:8px;padding:9px 12px;font-size:12px;color:#e8d9b0;line-height:1.6;margin-bottom:14px}
+.notice b{color:var(--amber)}
+
+/* 空状态 */
+.blank{text-align:center;color:var(--mut);padding:52px 20px;font-size:13px;line-height:1.8}
+.blank a{color:var(--blue)}
+
+/* ============ 移动端 ============ */
+@media(max-width:820px){
+  .pagewrap{padding:12px 12px 56px}
+  .topbar{height:auto;min-height:52px;flex-wrap:wrap;gap:8px;padding:8px 12px}
+  .brand{font-size:15px}
+  .pagenav{order:3;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;
+    flex-wrap:nowrap;padding-bottom:2px;scrollbar-width:none}
+  .pagenav::-webkit-scrollbar{display:none}
+  .navitem{min-height:36px;display:inline-flex;align-items:center;padding:7px 12px;font-size:13px}
+  .sessbar{padding:10px 12px;gap:10px}
+  .sbsel{min-width:0;flex:1;font-size:13px;min-height:38px}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .statbox .v{font-size:18px}
+  .lapchip{min-height:36px;display:inline-flex;align-items:center;padding:7px 13px;border-radius:18px}
+  .pbtn{min-height:36px;padding:7px 13px;font-size:12.5px;border-radius:18px;
+    display:inline-flex;align-items:center}
+  .segrow .segno{width:44px;font-size:11px}
+  .segrow .segval{width:66px;font-size:11.5px}
+  .segrow .seglap{width:38px}
+}
+@media(max-width:400px){
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .statbox .v{font-size:16px}
+  .card{padding:12px 12px}
+}
+@media(hover:none){ .navitem:hover{background:none;color:var(--mut)} .navitem.on:hover{background:#12283d;color:#fff} }
+
+/* ---- 车库页 ---- */
+.dzbig{border:1.5px dashed #33404f;border-radius:10px;padding:26px 16px;text-align:center;
+  background:var(--bg3);transition:.15s}
+body.dragging .dzbig{border-color:var(--blue);background:#12283d}
+.dzbig .dzinner{color:var(--mut);font-size:13px;line-height:1.9}
+.dzbig .dzsub{font-size:11.5px;opacity:.75}
+.garage{display:flex;flex-direction:column;gap:10px}
+.gitem{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:13px 15px;
+  cursor:pointer;transition:.14s}
+.gitem:hover{border-color:#3d4b5c}
+.gitem.on{border-color:var(--blue);box-shadow:0 0 0 1px var(--blue) inset}
+.gtop{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:6px}
+.gname{font-size:15px;font-weight:700}
+.gmeta{display:flex;gap:14px;flex-wrap:wrap;color:var(--mut);font-size:12px;margin-bottom:10px}
+.gmeta b{color:var(--txt);font-variant-numeric:tabular-nums}
+.gdate{opacity:.8}
+.gactions{display:flex;gap:6px;flex-wrap:wrap}
+.gbtn{border:1px solid var(--line);background:var(--bg3);color:var(--mut);border-radius:7px;
+  padding:5px 11px;font-size:12px;cursor:pointer;text-decoration:none;transition:.14s;
+  display:inline-flex;align-items:center}
+.gbtn:hover{border-color:var(--blue);color:var(--txt)}
+.gbtn.primary{background:#12283d;border-color:var(--blue);color:#fff}
+.gbtn.danger:hover{border-color:var(--accent);color:#ff6b6b}
+
+/* ---- 赛道图页 ---- */
+.mapcard{position:relative}   /* .mapbadge/.mypos/.alignbox 是绝对定位，需要定位父级 */
+.maphead{display:flex;align-items:center;gap:8px;padding:12px 14px;
+  border-bottom:1px solid var(--line);flex-wrap:wrap}
+.bigmap{height:440px;width:100%;background:var(--bg3)}
+.bigmap.tall{height:740px}
+
+/* ---- 通用小控件 ---- */
+.crow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.clab{color:var(--mut);font-size:12px;display:inline-flex;align-items:center;gap:6px}
+
+/* ---- 表格强调 ---- */
+.ctab tr.best td{background:rgba(59,158,255,.10)}
+.ctab tr.best td:first-child{color:var(--blue)}
+.mtx td.best{background:rgba(63,185,80,.20);color:#3fb950;font-weight:700}
+.mtx td.lapno{color:var(--txt);font-weight:700;white-space:nowrap}
+.mtx td.lapt{color:var(--txt);font-variant-numeric:tabular-nums;white-space:nowrap}
+.mtx td.mine{color:var(--amber);font-weight:700}

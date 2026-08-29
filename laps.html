@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>车库 · Kart Telemetry</title>
+<title>圈速 · Kart Telemetry</title>
 <link rel="stylesheet" href="style.css?v=14">
 </head>
 <body class="mpage">
@@ -17,20 +17,10 @@
 <div class="pagewrap">
   <div id="loaderr" style="display:none"></div>
   <div id="sessbar" class="sessbar"></div>
-
-  <div class="card">
-    <h3>我的数据 <span id="cnt" class="cunit"></span></h3>
-    <p class="chint">把 <b>.vbo</b>（卡丁车 VBOX / Racebobo）或 <b>.ibt</b>（iRacing 遥测）拖到页面任意位置即可上传。
-      数据只存在你自己浏览器的数据库里，不会上传到任何服务器。</p>
-    <div id="dropZone" class="dzbig">
-      <div class="dzinner">📁 把 .vbo / .ibt 文件拖到这里<br><span class="dzsub">或点右上角「+ 上传」选择文件</span></div>
-    </div>
-  </div>
-
-  <div id="list" class="garage"></div>
+  <div id="content"></div>
 </div>
 
 <script src="core.js?v=14"></script>
-<script src="garage.js?v=14"></script>
+<script src="laps.js?v=14"></script>
 </body>
 </html>
