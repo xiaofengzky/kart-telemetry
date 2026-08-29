@@ -146,6 +146,21 @@ canvas.chart{width:100%;background:var(--bg);border:1px solid var(--line);border
   margin-right:6px;vertical-align:middle}
 .chip.on{opacity:1;color:#fff;border-color:var(--c);box-shadow:0 0 0 1px var(--c) inset}
 .chip:hover{opacity:.85}
+
+/* 踏板图控制条 */
+.pedctrl{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;margin:0 0 8px}
+.pcgroup{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.pclabel{font-size:11px;color:var(--mut);margin-right:2px}
+.pbtn{border:1px solid var(--line);background:var(--bg2);color:var(--mut);border-radius:14px;
+  padding:3px 10px;font-size:11.5px;cursor:pointer;transition:.14s;white-space:nowrap;
+  -webkit-tap-highlight-color:transparent}
+.pbtn:hover{border-color:#3d4b5c;color:var(--txt)}
+.pbtn.on{background:#122a3d;border-color:var(--c,#3b9eff);color:#fff;box-shadow:0 0 0 1px var(--c,#3b9eff) inset}
+.pbtn.ov::before{content:'';display:inline-block;width:7px;height:7px;border-radius:50%;
+  background:var(--c);margin-right:5px;vertical-align:middle}
+.pbtn.ov{opacity:.5}
+.pbtn.ov.on{opacity:1}
+#chartPedal{cursor:crosshair;touch-action:none}
 .adv{background:#1b1407;border:1px solid #3a2c0c;border-left:3px solid var(--amber);border-radius:8px;padding:10px 12px;margin-top:6px}
 .adv ul{margin:6px 0;padding-left:16px;line-height:1.65;font-size:12px}
 .adv li{margin-bottom:5px}
@@ -229,9 +244,15 @@ canvas.chart{width:100%;background:var(--bg);border:1px solid var(--line);border
   .cmpchips{gap:8px}
   .lapsel{min-height:36px;padding:7px 10px;font-size:13px}
 
-  /* 图表高度自适应 */
+  /* 图表高度自适应（踏板图用内联高度，走高清重绘，不受此规则影响） */
   canvas.chart{height:auto;min-height:210px}
   .placeholder{padding:40px 16px}
+
+  /* 踏板图控制条：手机上保证触摸目标够大 */
+  .pedctrl{gap:8px 12px}
+  .pbtn{min-height:36px;padding:7px 13px;font-size:12.5px;border-radius:18px;
+    display:inline-flex;align-items:center}
+  .pclabel{font-size:11.5px}
 }
 
 /* ================= 超窄屏 ================ */

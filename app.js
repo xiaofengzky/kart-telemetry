@@ -10,8 +10,31 @@ let cmpLaps = new Set();    // 速度对比图当前勾选的圈
 const CMP_COLORS = ['#3b9eff', '#e10600', '#2ecc71', '#f5a623', '#a259ff', '#16d6c9', '#ff7ac6', '#ffd23f', '#7ed957', '#ff6b6b'];
 const cmpColor = i => CMP_COLORS[(i - 1) % CMP_COLORS.length];
 
+function niceStep(span, targetTicks) {
+  const rough = span / Math.max(1, targetTicks);
+  const exp = Math.floor(Math.log10(rough));
+  const frac = rough / Math.pow(10, exp);   // 1..10
+  const mant = frac <= 1.5 ? 1 : frac <= 3 ? 2 : frac <= 7 ? 5 : 10;
+  return mant * Math.pow(10, exp);
+}
+function axisTicks(min, max, targetTicks) {
+  const s = niceStep(max - min, targetTicks);
+  const start = Math.floor(min / s) * s, end = Math.ceil(max / s) * s;
+  const out = [];
+  for (let v = start; v <= end + 1e-9; v += s) out.push(v);
+  return { step: s, ticks: out };
+}
+
 const RAD = Math.PI / 180;
 const angDiff = (a, b) => { let d = a - b; while (d > 180) d -= 360; while (d < -180) d += 360; return d; };
+
+/* ---------- iRacing 踏板曲线 ----------
+   PEDAL_N：每圈采样点数。1% 步长（101 点）对 6km 赛道意味着 60m 一个点，
+   而刹车区常常只有 30~60m，细节全被抹掉；0.1% 步长（1001 点）≈ 6m 一个点，
+   才能看清入弯刹车斜率、trail braking 的松刹车过程、出弯给油时机。 */
+const PEDAL_N = 1000;
+/* 踏板曲线每行各列的含义 */
+const PEDAL_COLS = { pct: 0, thr: 1, brk: 2, vel: 3, gear: 4, rpm: 5, steer: 6, latg: 7, long: 8, dist: 9, time: 10 };
 
 /* ---------- 解析 ----------
    VBO 官方格式（Racelogic）：经纬度存的是【十进制分钟】，不是 NMEA 的 ddmm！
@@ -443,7 +466,7 @@ function analyze(points) {
     }
   }
   // 最快圈速度/G 曲线（100点）
-  const sp = [], gp = [], dp = [], pp = [];   // pp: iRacing 踏板曲线 [pct, throttle%, brake%]
+  const sp = [], gp = [], dp = [], pp = [];   // pp: iRacing 踏板曲线（高密度，见 PEDAL_COLS）
   if (best) {
     const a = best.startIdx, b = best.endIdx, D = best.distance_m;
     for (let pct = 0; pct <= 100; pct++) {
@@ -452,7 +475,29 @@ function analyze(points) {
       sp.push([pct, Math.round(points[ti].vel * 10) / 10]);
       gp.push([pct, Math.round(Math.abs(latg[ti]) * 100) / 100]);
       dp.push([pct, Math.round(driveG[ti] * 100) / 100]);
-      if (isIR) pp.push([pct, Math.round(points[ti].thr * 100), Math.round(points[ti].brk * 100)]);
+    }
+    // 踏板曲线用 0.1% 步长（约 1000 点）：1% 步长会把刹车区（常只有 30~60m）抹成 1~2 个点，看不出 trail braking 细节
+    if (isIR) {
+      const t0 = points[a].t, d0 = cum[a];
+      let ti = a;                                   // 增量指针，避免 O(N*M)
+      for (let k = 0; k <= PEDAL_N; k++) {
+        const target = d0 + k / PEDAL_N * D;
+        while (ti < b && cum[ti] < target) ti++;
+        const p = points[ti];
+        pp.push([
+          Math.round(k / PEDAL_N * 1000) / 10,      // 0 进度 %
+          Math.round(p.thr * 1000) / 10,            // 1 油门 %
+          Math.round(p.brk * 1000) / 10,            // 2 刹车 %
+          Math.round(p.vel * 10) / 10,              // 3 速度 km/h
+          p.gear | 0,                               // 4 档位
+          Math.round(p.rpm),                        // 5 转速
+          Math.round(p.steer * 1000) / 1000,        // 6 转向 rad
+          Math.round(Math.abs(latg[ti]) * 100) / 100, // 7 横向 G
+          Math.round(driveG[ti] * 100) / 100,       // 8 纵向 G
+          Math.round((cum[ti] - d0) * 10) / 10,     // 9 圈内距离 m
+          Math.round((p.t - t0) * 1000) / 1000      // 10 圈内时间 s
+        ]);
+      }
     }
   }
   // 分段 & 波动区
@@ -603,6 +648,8 @@ function renderSidebar() {
 function selectSession(id) {
   curId = id; const s = SESSIONS.find(x => x.id === id);
   selLap = null;
+  // 换会话时复位踏板图视窗（换圈不复位，方便前后对比同一段）
+  if (PEDAL.sess !== id) { PEDAL.sess = id; PEDAL.x0 = 0; PEDAL.x1 = 1; PEDAL.hover = null; }
   if (window.__closeNav) window.__closeNav();   // 手机端选完自动收起抽屉
   // 速度对比默认勾选最快圈 + 第二快圈（无完整圈时兜底为空）
   const sorted = [...s.analysis.full].sort((x, y) => x.time_s - y.time_s);
@@ -707,8 +754,32 @@ function renderDetail(s) {
     <div class="secblock"><h3>最快圈 速度 / 横向G</h3><canvas id="chart" class="chart" width="660" height="280"></canvas>
       <div class="satnote">横轴=赛道进度0→100%；蓝=速度km/h，红=横向G；虚线=弯角位置</div></div>
     ${isIR
-      ? `<div class="secblock"><h3>油门 / 刹车开度（iRacing 真实传感器）</h3><canvas id="chartPedal" class="chart" width="660" height="240"></canvas>
-         <div class="satnote">绿=油门开度，红=刹车开度（0-100%），由 iRacing 遥测直接读取；虚线=弯角位置</div></div>`
+      ? `<div class="secblock"><h3>油门 / 刹车开度（iRacing 真实传感器）</h3>
+         <div class="pedctrl" id="pedCtrl">
+           <div class="pcgroup"><span class="pclabel">横轴</span>
+             <button class="pbtn ${PEDAL.unit === 'pct' ? 'on' : ''}" data-unit="pct">进度 %</button>
+             <button class="pbtn ${PEDAL.unit === 'dist' ? 'on' : ''}" data-unit="dist">距离 m</button>
+             <button class="pbtn ${PEDAL.unit === 'time' ? 'on' : ''}" data-unit="time">时间 s</button>
+           </div>
+           <div class="pcgroup"><span class="pclabel">叠加</span>
+             <button class="pbtn ov ${PEDAL.ov.speed ? 'on' : ''}" data-ov="speed" style="--c:#3b9eff">速度</button>
+             <button class="pbtn ov ${PEDAL.ov.rpm ? 'on' : ''}" data-ov="rpm" style="--c:#f5a623">转速</button>
+             <button class="pbtn ov ${PEDAL.ov.latg ? 'on' : ''}" data-ov="latg" style="--c:#a259ff">横向G</button>
+             <button class="pbtn ov ${PEDAL.ov.steer ? 'on' : ''}" data-ov="steer" style="--c:#16d6c9">转向</button>
+             <button class="pbtn ov ${PEDAL.ov.gear ? 'on' : ''}" data-ov="gear" style="--c:#8b98a5">档位</button>
+           </div>
+           <div class="pcgroup"><span class="pclabel">视图</span>
+             <button class="pbtn" data-zoom="in">放大</button>
+             <button class="pbtn" data-zoom="out">缩小</button>
+             <button class="pbtn" data-zoom="reset">复位</button>
+             <button class="pbtn" data-h="-60">矮</button>
+             <button class="pbtn" data-h="60">高</button>
+           </div>
+         </div>
+         <canvas id="chartPedal" class="chart" width="660" height="${PEDAL.height}"></canvas>
+         <div class="satnote">绿=油门开度、红=刹车开度（0-100%，iRacing 真实传感器）；橙色虚线=弯角起点，底部色带=档位。
+           每圈采样 <b>1001 点</b>（约 6m 一个），<b>滚轮/双指缩放、拖拽平移、鼠标悬停读数值、双击复位</b>——放大后能看清入弯刹车斜率、trail braking 松刹车的过渡、出弯给油时机。
+           横轴换「距离 m」可直接读出刹车点离弯心多少米，配合换「时间 s」能算某段耗时。</div></div>`
       : `<div class="secblock"><h3>纵向G（刹车/油门曲线）</h3><canvas id="chartLong" class="chart" width="660" height="240"></canvas>
          <div class="satnote">红=刹车（纵向G为负），绿=油门（纵向G为正）；由速度差分推导，是卡丁车无刹车传感器时读刹车/油门点的标准做法</div></div>`}
     <div class="secblock"><h3>多圈速度叠加对比</h3>
@@ -724,8 +795,12 @@ function renderDetail(s) {
       ? '注：iRacing .ibt 遥测坐标是模拟器输出的精确 WGS84，赛道直接落在真实场地；油门/刹车/档位/转速均为模拟器真实通道。'
       : '注：VBO 经纬度按官方格式（十进制分钟，经度正数为西经）解析，赛道已落在<b>真实场地位置</b>。若仍有几米误差属 GPS 正常漂移，可用地图「对齐」微调。'}</div>`;
   drawChart(document.getElementById('chart'), a.speedProfile, a.gProfile, a.corners);
-  if (isIR) drawPedalChart(document.getElementById('chartPedal'), a.pedalProfile, a.corners);
-  else drawLongChart(document.getElementById('chartLong'), a.longGProfile, a.corners);
+  if (isIR) {
+    const pdc = document.getElementById('chartPedal');
+    drawPedalChart(pdc, a.pedalProfile, a.corners);
+    bindPedalChart(pdc, a.pedalProfile);
+    bindPedalCtrl(a);
+  } else drawLongChart(document.getElementById('chartLong'), a.longGProfile, a.corners);
   drawCompare(s);
   const chips = document.getElementById('cmpChips');
   if (chips) chips.onclick = e => {
@@ -796,37 +871,326 @@ function drawLongChart(cv, dp, corners) {
 }
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 
-/* iRacing 油门/刹车开度图（真实传感器 0-100%） */
+/* 按 CSS 实际宽度 + devicePixelRatio 设置画布分辨率，避免被拉伸模糊 */
+function fitCanvas(cv, cssH) {
+  const dpr = window.devicePixelRatio || 1;
+  cv.style.height = cssH + 'px';
+  // 先写 style.height 再量：全局 box-sizing:border-box 时 clientHeight 会比 cssH 少掉边框，
+  // 直接用 cssH 做后备缓冲会让底部几像素被裁掉
+  const cssW = cv.clientWidth || cv.parentElement.clientWidth || 660;
+  const cssHReal = cv.clientHeight || cssH;
+  const w = Math.max(1, Math.round(cssW * dpr)), h = Math.max(1, Math.round(cssHReal * dpr));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);   // 之后一律用 CSS 像素坐标绘制
+  return { W: cssW, H: cssHReal, ctx };
+}
+
+/* ================= iRacing 油门/刹车详细曲线 =================
+   可缩放（滚轮 / 拖拽 / 双击复位）、悬停十字读数、横向可换单位（进度/距离/时间）、
+   可叠加速度 / 转速 / 横向G / 转向角，底部档位色带。
+   数据来自 pedalProfile（1001 点，列定义见 PEDAL_COLS）。 */
+const PEDAL = {
+  unit: 'pct',                                         // pct | dist | time
+  x0: 0, x1: 1,                                        // 视窗（按采样下标归一化）
+  ov: { speed: true, gear: true, rpm: false, latg: false, steer: false },
+  hover: null,                                         // 悬停处的下标
+  drag: null,                                          // {x, x0, x1}
+  pinch: null,                                         // 双指缩放
+  height: 420,
+  sess: null                                           // 切换会话时复位视窗
+};
+function pedalRowAt(pp, i) { return pp[Math.max(0, Math.min(pp.length - 1, Math.round(i)))]; }
+function pedalUnitCfg(pp, unit) {
+  const last = pp[pp.length - 1];
+  if (unit === 'dist') return { col: PEDAL_COLS.dist, max: last[PEDAL_COLS.dist], fmt: v => Math.round(v) + 'm', label: '圈内距离' };
+  if (unit === 'time') return { col: PEDAL_COLS.time, max: last[PEDAL_COLS.time], fmt: v => v.toFixed(1) + 's', label: '圈内时间' };
+  return { col: PEDAL_COLS.pct, max: 100, fmt: v => v.toFixed(1) + '%', label: '赛道进度' };
+}
 function drawPedalChart(cv, pp, corners) {
   if (!cv || !pp.length) return;
-  const W = cv.width, H = cv.height, padL = 38, padR = 38, padT = 14, padB = 22;
-  const ctx = cv.getContext('2d');
+  const N = pp.length - 1;
+  const padL = 44, padR = 50, padT = 16, padB = 34, gearH = 13;
+  const showGear = PEDAL.ov.gear;
+  const { W, H, ctx } = fitCanvas(cv, PEDAL.height);
   ctx.clearRect(0, 0, W, H);
-  const sx = p => padL + p / 100 * (W - padL - padR);
-  const sy = v => H - padB - v / 100 * (H - padT - padB);
-  ctx.strokeStyle = '#7a6a3a'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
-  for (const c of corners) { ctx.beginPath(); ctx.moveTo(sx(c.progress_pct), padT); ctx.lineTo(sx(c.progress_pct), H - padB); ctx.stroke(); }
-  ctx.setLineDash([]);
-  // 油门填充（绿）
-  ctx.fillStyle = 'rgba(46,204,113,.28)';
-  ctx.beginPath(); ctx.moveTo(sx(pp[0][0]), sy(0));
-  pp.forEach(p => ctx.lineTo(sx(p[0]), sy(p[1])));
-  ctx.lineTo(sx(pp[pp.length - 1][0]), sy(0)); ctx.closePath(); ctx.fill();
-  // 刹车填充（红）
-  ctx.fillStyle = 'rgba(225,6,0,.28)';
-  ctx.beginPath(); ctx.moveTo(sx(pp[0][0]), sy(0));
-  pp.forEach(p => ctx.lineTo(sx(p[0]), sy(p[2])));
-  ctx.lineTo(sx(pp[pp.length - 1][0]), sy(0)); ctx.closePath(); ctx.fill();
-  // 线
-  ctx.strokeStyle = '#2ecc71'; ctx.lineWidth = 1.6; ctx.beginPath();
-  pp.forEach((p, i) => { const x = sx(p[0]), y = sy(p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
-  ctx.strokeStyle = '#e10600'; ctx.lineWidth = 1.6; ctx.beginPath();
-  pp.forEach((p, i) => { const x = sx(p[0]), y = sy(p[2]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
-  // 刻度
-  ctx.fillStyle = '#8b98a5'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
-  for (let k = 0; k <= 4; k++) { const v = 100 * k / 4; ctx.fillText(v.toFixed(0) + '%', padL - 4, sy(v) + 3); }
-  ctx.textAlign = 'center';
-  ctx.fillText('赛道进度 →', W / 2, H - 6);
+  const plotH = H - padT - padB - (showGear ? gearH : 0);
+  const plotW = W - padL - padR;
+  const x0 = PEDAL.x0, x1 = Math.max(PEDAL.x1, x0 + 1e-4);
+  const sx = i => padL + (i / N - x0) / (x1 - x0) * plotW;
+  const sy = v => padT + plotH - Math.max(0, Math.min(100, v)) / 100 * plotH;   // 左轴：踏板开度 0-100%
+  const uc = pedalUnitCfg(pp, PEDAL.unit);
+  // 右轴量程（叠加速度 / 转速 / 横向G）
+  let ovMax = 1;
+  const ovSeries = [];
+  if (PEDAL.ov.speed) { let m = 0; for (const r of pp) m = Math.max(m, r[PEDAL_COLS.vel]); ovSeries.push({ col: PEDAL_COLS.vel, color: '#3b9eff', max: m, name: '速度 km/h', fmt: v => v.toFixed(0) }); }
+  if (PEDAL.ov.rpm) { let m = 0; for (const r of pp) m = Math.max(m, r[PEDAL_COLS.rpm]); ovSeries.push({ col: PEDAL_COLS.rpm, color: '#f5a623', max: m, name: '转速 rpm', fmt: v => v.toFixed(0) }); }
+  if (PEDAL.ov.latg) { let m = 0; for (const r of pp) m = Math.max(m, r[PEDAL_COLS.latg]); ovSeries.push({ col: PEDAL_COLS.latg, color: '#a259ff', max: Math.max(m, 0.5), name: '横向G', fmt: v => v.toFixed(2) }); }
+  for (const s of ovSeries) ovMax = Math.max(ovMax, s.max);
+  const sy2 = v => padT + plotH - Math.max(0, Math.min(ovMax, v)) / ovMax * plotH;   // 右轴
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();
+
+  // ① 弯角区间：交替底色 + 顶部编号
+  if (corners && corners.length) {
+    const pctToIdx = p => p / 100 * N;
+    for (let ci = 0; ci < corners.length; ci++) {
+      const s = pctToIdx(corners[ci].progress_pct);
+      const e = ci + 1 < corners.length ? pctToIdx(corners[ci + 1].progress_pct) : N;
+      if (ci % 2 === 0) { ctx.fillStyle = 'rgba(255,255,255,.035)'; ctx.fillRect(sx(s), padT, sx(e) - sx(s), plotH); }
+      ctx.strokeStyle = 'rgba(245,166,35,.55)'; ctx.lineWidth = 1; ctx.setLineDash([3, 4]);
+      ctx.beginPath(); ctx.moveTo(sx(s), padT); ctx.lineTo(sx(s), padT + plotH); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = '#f5a623'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'left';
+      const lx = Math.max(sx(s) + 3, padL + 2);
+      if (lx < padL + plotW - 2) ctx.fillText('C' + corners[ci].id, lx, padT + 11);
+    }
+  }
+  // ② 网格
+  ctx.strokeStyle = 'rgba(255,255,255,.07)'; ctx.lineWidth = 1;
+  for (let k = 0; k <= 4; k++) { const y = sy(25 * k); ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke(); }
+  // ③ 填充区（刹车在下、油门在上，重叠处可见叠加）
+  const i0 = Math.max(0, Math.floor(x0 * N)), i1 = Math.min(N, Math.ceil(x1 * N));
+  const area = (col, fill) => {
+    ctx.fillStyle = fill; ctx.beginPath(); ctx.moveTo(sx(i0), sy(0));
+    for (let i = i0; i <= i1; i++) ctx.lineTo(sx(i), sy(pp[i][col]));
+    ctx.lineTo(sx(i1), sy(0)); ctx.closePath(); ctx.fill();
+  };
+  area(PEDAL_COLS.brk, 'rgba(225,6,0,.22)');
+  area(PEDAL_COLS.thr, 'rgba(46,204,113,.22)');
+  // ④ 叠加通道（右轴）
+  for (const s of ovSeries) {
+    ctx.strokeStyle = s.color; ctx.lineWidth = 1.2; ctx.globalAlpha = .85; ctx.beginPath();
+    for (let i = i0; i <= i1; i++) { const x = sx(i), y = sy2(pp[i][s.col]); i === i0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+    ctx.stroke(); ctx.globalAlpha = 1;
+  }
+  // ⑤ 踏板线（画在最上层）
+  const line = (col, color, w) => {
+    ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineJoin = 'round'; ctx.beginPath();
+    for (let i = i0; i <= i1; i++) { const x = sx(i), y = sy(pp[i][col]); i === i0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+    ctx.stroke();
+  };
+  line(PEDAL_COLS.thr, '#2ecc71', 1.8);
+  line(PEDAL_COLS.brk, '#e10600', 1.8);
+  // ⑥ 转向角（叠加在踏板轴上，0-100% 表示 ±90°）
+  if (PEDAL.ov.steer) {
+    ctx.strokeStyle = 'rgba(22,214,201,.9)'; ctx.lineWidth = 1.2; ctx.beginPath();
+    for (let i = i0; i <= i1; i++) {
+      const st = pp[i][PEDAL_COLS.steer];
+      const v = 50 + Math.max(-1, Math.min(1, st / (Math.PI / 2))) * 50;
+      const x = sx(i), y = sy(v); i === i0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // ⑦ 底部档位色带
+  if (showGear) {
+    const gy = padT + plotH, gh = gearH;
+    ctx.save(); ctx.beginPath(); ctx.rect(padL, gy, plotW, gh); ctx.clip();
+    let prevG = null, segStart = i0;
+    for (let i = i0; i <= i1; i++) {
+      const g = pp[i][PEDAL_COLS.gear];
+      if (g !== prevG) {
+        if (prevG !== null) {
+          ctx.fillStyle = ['#5a6470', '#3b9eff', '#16d6c9', '#2ecc71', '#f5a623', '#ff7ac6', '#e10600', '#a259ff'][Math.min(7, Math.max(0, prevG))];
+          ctx.fillRect(sx(segStart), gy, Math.max(1, sx(i) - sx(segStart)), gh);
+          if (sx(i) - sx(segStart) > 14) { ctx.fillStyle = '#0b0e13'; ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(prevG > 0 ? String(prevG) : 'N', (sx(segStart) + sx(i)) / 2, gy + gh - 3); }
+        }
+        segStart = i; prevG = g;
+      }
+    }
+    if (prevG !== null) {
+      ctx.fillStyle = ['#5a6470', '#3b9eff', '#16d6c9', '#2ecc71', '#f5a623', '#ff7ac6', '#e10600', '#a259ff'][Math.min(7, Math.max(0, prevG))];
+      ctx.fillRect(sx(segStart), gy, Math.max(1, sx(i1) - sx(segStart)), gh);
+      if (sx(i1) - sx(segStart) > 14) { ctx.fillStyle = '#0b0e13'; ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(prevG > 0 ? String(prevG) : 'N', (sx(segStart) + sx(i1)) / 2, gy + gh - 3); }
+    }
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.strokeRect(padL, gy, plotW, gh);
+    ctx.fillStyle = '#8b98a5'; ctx.font = '9px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText('档', padL - 4, gy + gh - 3);
+  }
+  // ⑧ 左边框 + 右轴刻度
+  ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + plotH); ctx.stroke();
+  ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+  for (let k = 0; k <= 4; k++) { const v = 25 * k; ctx.fillStyle = '#8b98a5'; ctx.fillText(v + '%', padL - 5, sy(v) + 3); }
+  if (ovSeries.length) {
+    ctx.textAlign = 'left';
+    for (let k = 0; k <= 4; k++) {
+      const v = ovMax * k / 4;
+      ctx.fillStyle = ovSeries[0].color; ctx.globalAlpha = .85;
+      ctx.fillText(ovSeries[0].fmt(v), padL + plotW + 5, sy2(v) + 3); ctx.globalAlpha = 1;
+    }
+  }
+  // ⑨ X 轴刻度（按当前单位 & 当前视窗跨度自适应，避免放大后刻度重叠）
+  const firstRow = pp[i0], lastRow = pp[i1];
+  const uMin = firstRow[uc.col], uMax = lastRow[uc.col];
+  const at = axisTicks(uMin, uMax, Math.max(2, plotW / 110));
+  ctx.fillStyle = '#8b98a5'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  const axisY = H - padB + (showGear ? gearH : 0) + 14;
+  ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.beginPath(); ctx.moveTo(padL, axisY - 17); ctx.lineTo(padL + plotW, axisY - 17); ctx.stroke();
+  for (const v of at.ticks) {
+    if (v < uMin - 1e-9 || v > uMax + 1e-9) continue;
+    const targetIdx = (v - uMin) / (uMax - uMin) * (i1 - i0) + i0;
+    const x = sx(targetIdx);
+    ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.beginPath(); ctx.moveTo(x, axisY - 18); ctx.lineTo(x, axisY - 12); ctx.stroke();
+    ctx.fillText(uc.fmt(v), Math.max(padL + 12, Math.min(padL + plotW - 12, x)), axisY);
+  }
+  ctx.fillStyle = '#6b7885'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(uc.label + ' →', padL, H - 6);
+  if (x1 - x0 < 0.98) { ctx.textAlign = 'right'; ctx.fillStyle = '#f5a623'; ctx.fillText('已放大 ' + (1 / (x1 - x0)).toFixed(1) + '× · 双击复位', padL + plotW, H - 6); }
+
+  // ⑩ 悬停十字线 + 读数框
+  if (PEDAL.hover != null) {
+    const i = Math.max(0, Math.min(N, PEDAL.hover)), row = pp[i], x = sx(i);
+    ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,.45)'; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH + (showGear ? gearH : 0)); ctx.stroke(); ctx.setLineDash([]); ctx.restore();
+    for (const [col, color] of [[PEDAL_COLS.thr, '#2ecc71'], [PEDAL_COLS.brk, '#e10600']]) {
+      ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, sy(row[col]), 3.2, 0, 7); ctx.fill();
+    }
+    const rows = [
+      [uc.label, uc.fmt(row[uc.col])],
+      ['油门', row[PEDAL_COLS.thr].toFixed(1) + '%'],
+      ['刹车', row[PEDAL_COLS.brk].toFixed(1) + '%'],
+      ['速度', row[PEDAL_COLS.vel].toFixed(1) + ' km/h'],
+      ['档位', row[PEDAL_COLS.gear] > 0 ? row[PEDAL_COLS.gear] : 'N'],
+      ['转速', row[PEDAL_COLS.rpm] + ' rpm'],
+      ['转向', (row[PEDAL_COLS.steer] / RAD).toFixed(1) + '°'],
+      ['横/纵G', row[PEDAL_COLS.latg].toFixed(2) + ' / ' + row[PEDAL_COLS.long].toFixed(2)]
+    ];
+    const bw = 132, bh = rows.length * 14 + 8;
+    let bx = x + 12; if (bx + bw > padL + plotW) bx = x - 12 - bw; if (bx < padL) bx = padL + 2;
+    let by = padT + 6; if (by + bh > padT + plotH) by = padT + plotH - bh - 4;
+    ctx.fillStyle = 'rgba(8,11,16,.93)'; ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 5); ctx.fill(); ctx.stroke();
+    ctx.textAlign = 'left'; ctx.font = '10px sans-serif';
+    rows.forEach((r, k) => {
+      const ty = by + 14 + k * 14;
+      ctx.fillStyle = '#8b98a5'; ctx.fillText(r[0], bx + 7, ty);
+      ctx.fillStyle = '#e6edf3'; ctx.textAlign = 'right'; ctx.fillText(r[1], bx + bw - 7, ty); ctx.textAlign = 'left';
+    });
+  }
+}
+/* 绑定踏板图的交互：滚轮/双指缩放、拖拽平移、悬停读数、双击复位 */
+function bindPedalChart(cv, pp) {
+  if (!cv || !pp || !pp.length) return;
+  const N = pp.length - 1;
+  const padL = 44, padR = 50;
+  const plotW = () => Math.max(60, (cv.clientWidth || 660) - padL - padR);
+  const redraw = () => { const s = SESSIONS.find(x => x.id === curId); if (s) drawPedalChart(cv, s.analysis.pedalProfile, s.analysis.corners); };
+  const frac = clientX => {
+    const r = cv.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (clientX - r.left - padL) / plotW()));
+  };
+  const idxFromX = clientX => Math.round((PEDAL.x0 + frac(clientX) * (PEDAL.x1 - PEDAL.x0)) * N);
+  const clamp = () => {
+    const span = Math.min(1, Math.max(0.008, PEDAL.x1 - PEDAL.x0));   // 最多放大约 125×
+    PEDAL.x0 = Math.max(0, Math.min(1 - span, PEDAL.x0)); PEDAL.x1 = PEDAL.x0 + span;
+  };
+  const zoomAt = (f, k) => {
+    const at = PEDAL.x0 + f * (PEDAL.x1 - PEDAL.x0);
+    PEDAL.x0 = at - (at - PEDAL.x0) * k; PEDAL.x1 = at + (PEDAL.x1 - at) * k;
+    clamp();
+  };
+  const pointers = new Map();          // pointerId → clientX
+  let pan = null;                      // {from, x0, x1}
+  let pinch = null;                    // {d0, x0, x1, f}
+
+  cv.style.cursor = 'crosshair';
+  cv.style.touchAction = 'none';       // 手机上禁用默认滚动，才能接管拖拽/缩放
+
+  cv.onwheel = e => {
+    e.preventDefault();
+    zoomAt(frac(e.clientX), e.deltaY > 0 ? 1.2 : 1 / 1.2);
+    redraw();
+  };
+  cv.onpointerdown = e => {
+    cv.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, e.clientX);
+    if (pointers.size === 2) {                       // 进入双指缩放
+      const xs = [...pointers.values()];
+      pinch = { d0: Math.abs(xs[1] - xs[0]) || 1, x0: PEDAL.x0, x1: PEDAL.x1, f: (frac(xs[0]) + frac(xs[1])) / 2 };
+      pan = null; PEDAL.drag = null;
+      return;
+    }
+    if (e.pointerType === 'touch') PEDAL.hover = idxFromX(e.clientX);
+    pan = { from: e.clientX, x0: PEDAL.x0, x1: PEDAL.x1 };
+    PEDAL.drag = pan;
+  };
+  cv.onpointermove = e => {
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, e.clientX);
+    if (pinch && pointers.size >= 2) {
+      const xs = [...pointers.values()];
+      const d = Math.abs(xs[1] - xs[0]) || 1;
+      const k = pinch.d0 / d;                        // 手指张开 → 放大
+      PEDAL.x1 = pinch.x1; PEDAL.x0 = pinch.x0;
+      zoomAt(pinch.f, k);
+      redraw(); return;
+    }
+    if (pan) {
+      const dx = (e.clientX - pan.from) / plotW() * (pan.x1 - pan.x0);
+      PEDAL.x0 = pan.x0 - dx; PEDAL.x1 = pan.x1 - dx; clamp(); redraw(); return;
+    }
+    PEDAL.hover = idxFromX(e.clientX); redraw();
+  };
+  const endPointer = e => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch = null;
+    if (pointers.size === 0) { pan = null; PEDAL.drag = null; }
+  };
+  cv.onpointerup = endPointer;
+  cv.onpointercancel = endPointer;
+  cv.onpointerleave = () => { PEDAL.hover = null; pan = null; PEDAL.drag = null; redraw(); };
+  cv.ondblclick = () => { PEDAL.x0 = 0; PEDAL.x1 = 1; redraw(); };
+}
+/* 踏板图控制条：横轴单位 / 叠加通道 / 缩放 / 高度 */
+function bindPedalCtrl(a) {
+  const box = document.getElementById('pedCtrl');
+  const pdc = document.getElementById('chartPedal');
+  if (!box || !pdc || !a.pedalProfile || !a.pedalProfile.length) return;
+  const redraw = () => drawPedalChart(pdc, a.pedalProfile, a.corners);
+  const clampSpan = () => {
+    const span = Math.min(1, Math.max(0.008, PEDAL.x1 - PEDAL.x0));
+    PEDAL.x0 = Math.max(0, Math.min(1 - span, PEDAL.x0)); PEDAL.x1 = PEDAL.x0 + span;
+  };
+  const zoomCenter = k => {
+    const at = (PEDAL.x0 + PEDAL.x1) / 2;
+    PEDAL.x0 = at - (at - PEDAL.x0) * k; PEDAL.x1 = at + (PEDAL.x1 - at) * k;
+    clampSpan();
+  };
+  box.onclick = e => {
+    const b = e.target.closest ? e.target.closest('.pbtn') : null;
+    if (!b) return;
+    if (b.dataset.unit) {
+      PEDAL.unit = b.dataset.unit;
+      box.querySelectorAll('[data-unit]').forEach(x => x.classList.toggle('on', x.dataset.unit === PEDAL.unit));
+      redraw();
+    } else if (b.dataset.ov) {
+      const k = b.dataset.ov;
+      PEDAL.ov[k] = !PEDAL.ov[k];
+      b.classList.toggle('on', PEDAL.ov[k]);
+      redraw();
+    } else if (b.dataset.zoom) {
+      const z = b.dataset.zoom;
+      if (z === 'in') zoomCenter(1 / 1.8);
+      else if (z === 'out') zoomCenter(1.8);
+      else { PEDAL.x0 = 0; PEDAL.x1 = 1; PEDAL.hover = null; }
+      redraw();
+    } else if (b.dataset.h) {
+      PEDAL.height = Math.max(260, Math.min(780, PEDAL.height + (+b.dataset.h)));
+      redraw();
+    }
+  };
+}
+/* roundRect 兜底（老浏览器没有该方法） */
+if (typeof CanvasRenderingContext2D !== 'undefined' && !CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    this.moveTo(x + r, y);
+    this.arcTo(x + w, y, x + w, y + h, r); this.arcTo(x + w, y + h, x, y + h, r);
+    this.arcTo(x, y + h, x, y, r); this.arcTo(x, y, x + w, y, r); this.closePath();
+    return this;
+  };
 }
 
 /* 单圈速度曲线：按赛道进度 0→100% 重采样（不同圈长也按位置对齐） */
@@ -1104,4 +1468,19 @@ async function restoreSessions() {
 window.addEventListener('DOMContentLoaded', () => {
   initMap(); setupIO();
   restoreSessions();
+  // 视口变化后按新宽度重绘（canvas 是 width:100%，分辨率需跟着变，否则会拉伸模糊）
+  let rt = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(rt);
+    rt = setTimeout(() => {
+      const s = SESSIONS.find(x => x.id === curId);
+      if (!s) return;
+      const a = s.analysis, isIR = !!a.isIR;
+      const pdc = document.getElementById('chartPedal');
+      if (isIR && pdc) drawPedalChart(pdc, a.pedalProfile, a.corners);
+      const cc = document.getElementById('chartCompare'); if (cc) drawCompare(s);
+      const ch = document.getElementById('chart'); if (ch) drawChart(ch, a.speedProfile, a.gProfile, a.corners);
+      const lc = document.getElementById('chartLong'); if (lc && !isIR) drawLongChart(lc, a.longGProfile, a.corners);
+    }, 160);
+  });
 });
