@@ -253,14 +253,15 @@ function trackSketch(cv, s, opts = {}) {
    这样 delta 末值必然等于两圈真实圈速差，不会有累积漂移。
    delta[k] = B 的圈内时间 − A 的圈内时间
      → 曲线往上走 = B 在这段丢时间；往下走 = B 在这段捡时间 */
-function compareLaps(s, lapA, lapB, N = 1000) {
-  const A = lapTrace(s, lapA, 'speed', N);
-  const B = lapTrace(s, lapB, 'speed', N);
-  const delta = [], dist = [], spdDiff = [];
+function compareLaps(sA, lapA, sB, lapB, N = 1000) {
+  const A = lapTrace(sA, lapA, 'speed', N);
+  const B = lapTrace(sB, lapB, 'speed', N);
+  const delta = [], dist = [], spdDiff = [], pct = [];
   for (let k = 0; k <= N; k++) {
     delta.push(B[k].t - A[k].t);            // 秒，正 = B 慢
     dist.push(A[k].d);                       // X 轴用参考圈的圈内距离
     spdDiff.push(B[k].v - A[k].v);           // 速度差 km/h，负 = B 慢
+    pct.push(k / N * 100);                   // 圈内进度 %（跨 session 对比时用，距离不可比）
   }
   // 速度差做一点平滑，避免逐点抖动看不出趋势
   const sm = k => {
@@ -282,7 +283,7 @@ function compareLaps(s, lapA, lapB, N = 1000) {
   }
   const total = delta[N];
   return {
-    N, delta, dist, spdDiff: spdDiffS, zones,
+    N, delta, dist, pct, spdDiff: spdDiffS, zones,
     total,
     lapA: lapA.index, lapB: lapB.index,
     timeA: lapA.time_s, timeB: lapB.time_s,
@@ -290,6 +291,33 @@ function compareLaps(s, lapA, lapB, N = 1000) {
     lost: zones.filter(z => z.gain > 0).sort((a, b) => b.gain - a.gain).slice(0, 5),
     gained: zones.filter(z => z.gain < 0).sort((a, b) => a.gain - b.gain).slice(0, 5)
   };
+}
+
+/* ---------- 赛道名显示（英文 → 中文） ----------
+   iRacing 的 sessionInfo 给的是英文赛道名（TrackDisplayName），
+   这里映射成中文，没收录的原样显示。 */
+const TRACK_ZH = {
+  'Road America': '美国之路', 'Watkins Glen': '沃特金斯格伦', 'Watkins Glen International': '沃特金斯格伦',
+  'Spa-Francorchamps': '斯帕', 'Monza': '蒙扎', 'Suzuka': '铃鹿', 'Silverstone': '银石',
+  'Nürburgring': '纽博格林', 'Nurburgring': '纽博格林', 'Laguna Seca': '拉古纳塞卡',
+  'Sebring': '赛百灵', 'Daytona': '戴托纳', 'Le Mans': '勒芒', 'Imola': '伊莫拉',
+  'Zandvoort': '赞德沃特', 'Barcelona': '巴塞罗那', 'Hungaroring': '匈牙利环',
+  'Red Bull Ring': '红牛环', 'Interlagos': '英特拉格斯', 'Mount Panorama': '全景山',
+  'Monaco': '摩纳哥', 'Mugello': '穆杰罗', 'Road Atlanta': '亚特兰大路',
+  'Zolder': '佐尔德', 'Charlotte': '夏洛特', 'Long Beach': '长滩', 'Mid-Ohio': '中俄亥俄',
+  'Indianapolis': '印第安纳波利斯', 'COTA': '美洲赛道', 'Circuit of the Americas': '美洲赛道',
+  'Kyalami': '卡拉米', 'Hockenheim': '霍根海姆', 'Oulton Park': '奥顿公园',
+  'Brands Hatch': '布兰兹哈奇', 'Donington': '多宁顿', 'Snetterton': '斯内特顿',
+  'Phillip Island': '菲利普岛', 'Sandown': '桑当', 'Bathurst': '巴瑟斯特'
+};
+function trackZh(t) {
+  if (!t) return '未分类赛道';
+  return TRACK_ZH[t] || t;
+}
+/* session 的赛道字段：iRacing 自动取赛道名，VBO 没有就归「未分类赛道」 */
+function sessionTrack(s) {
+  if (s.track) return s.track;
+  return s.source === 'iracing' ? (s.name || '') : '';
 }
 
 /* ---------- 极限圈速（Optimal Lap / 理论最快圈） ----------

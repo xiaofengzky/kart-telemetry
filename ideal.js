@@ -199,7 +199,11 @@
         location.href = 'track.html';
       };
       if (cmp) cmp.onclick = () => {
-        localStorage.setItem('kart.focusCmp', JSON.stringify({ a: idl.perLap.reduce((m, p) => p.time_s < m.time_s ? p : m).lap, b: sg.lap }));
+        // sa/sb = 当前 session id：对比页据此选中正确的「节」
+        localStorage.setItem('kart.focusCmp', JSON.stringify({
+          sa: s.id, a: idl.perLap.reduce((m, p) => p.time_s < m.time_s ? p : m).lap,
+          sb: s.id, b: sg.lap
+        }));
         location.href = 'compare.html';
       };
     }

@@ -1388,7 +1388,7 @@ function loadIBT(file, onDone) {
       const d = file.lastModified ? new Date(file.lastModified) : new Date();
       const date = 'iRacing ' + d.toLocaleDateString('zh-CN') + ' ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
       const s = { id: Date.now() + '_' + SESSIONS.length, name, date, points: pts, source: 'iracing',
-        offset: { dLat: 0, dLon: 0 }, excluded: [], analysis: analyze(pts) };
+        track: name, offset: { dLat: 0, dLon: 0 }, excluded: [], analysis: analyze(pts) };
       SESSIONS.push(s);
       renderSidebar();
       if (SESSIONS.length === 1) selectSession(s.id);
@@ -1408,7 +1408,7 @@ function loadFile(file, onDone) {
       : (parsed.comments.track || file.name.replace(/\.vbo$/i, ''));
     const date = parsed.comments.beijing || ('UTC ' + parsed.points[0].t.toFixed(0));
     const id = Date.now() + '_' + SESSIONS.length;
-    const s = { id, name, date, points: parsed.points, source: 'vbo', offset: { dLat: 0, dLon: 0 }, excluded: [], analysis: analyze(parsed.points) };
+    const s = { id, name, date, points: parsed.points, source: 'vbo', track: '', offset: { dLat: 0, dLon: 0 }, excluded: [], analysis: analyze(parsed.points) };
     SESSIONS.push(s);
     renderSidebar();
     if (SESSIONS.length === 1) selectSession(id);
@@ -1504,6 +1504,7 @@ function dbSave(s) {
       tx.objectStore('sessions').put({
         id: s.id, name: s.name, date: s.date, source: s.source || 'vbo',
         points: s.points, offset: s.offset || { dLat: 0, dLon: 0 },
+        track: s.track || (s.source === 'iracing' ? s.name : ''),
         excluded: (s.excluded || []).slice(), savedAt: Date.now()
       });
       tx.oncomplete = res; tx.onerror = () => res();
@@ -1527,6 +1528,7 @@ function dbDelete(id) {
 function rebuildSession(rec) {
   const excluded = Array.isArray(rec.excluded) ? rec.excluded.filter(x => typeof x === 'number') : [];
   const s = { id: rec.id, name: rec.name, date: rec.date, source: rec.source || 'vbo',
+    track: rec.track || (rec.source === 'iracing' ? rec.name : ''),
     points: rec.points, offset: rec.offset || { dLat: 0, dLon: 0 },
     excluded, analysis: analyze(rec.points, excluded) };
   return s;

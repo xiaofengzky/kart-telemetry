@@ -1,107 +1,155 @@
-/* 多圈对比页：任意两圈的各项数据差距在哪
-   核心是累积时间 Delta —— 曲线往上走=对比圈在这段丢时间，往下走=捡时间 */
+/* 多圈对比页：任意两圈（可跨 session/跨节）的各项数据差距在哪
+   核心是累积时间 Delta —— 曲线往上走=对比圈在这段丢时间，往下走=捡时间
+   跨 session 时 X 轴用「圈内进度 %」（不同节里程不同，距离不可比） */
 (function () {
   const N = 1000;
-  let A = null, B = null;          // 参考圈 / 对比圈的 lap index
+  let A = null, B = null;          // {sid, lap}：参考圈 / 对比圈
   let cmp = null;                  // compareLaps 结果
   let trA = {}, trB = {};          // 各通道曲线缓存
   const show = { thr: true, brk: true, speed: false, steer: false, gear: false, rpm: false, latg: false, long: false };
   const views = {};                // 各图视窗
   const view = k => (views[k] || (views[k] = { i0: 0, i1: N }));
 
-  function lapByIdx(i) { const s = curSession(); return s ? s.analysis.full.find(l => l.index === i) : null; }
+  function sessById(sid) { return SESSIONS.find(x => x.id === sid) || null; }
+  function lapGet(sid, idx) { const s = sessById(sid); return s ? s.analysis.full.find(l => l.index === idx) : null; }
+  function sDate(s) { return String(s.date || '').replace(/^iRacing /, ''); }
 
-  /* 从极限圈速页传过来的「要对比哪两圈」，读完立刻清掉，避免下次进页面被粘住 */
+  /* 从极限圈速页传过来的「要对比哪两圈」，读完立刻清掉。
+     新格式 {sa, a, sb, b} 跨 session；老格式 {a, b} 视为当前 session */
   function loadFocusCmp() {
     try {
       const raw = localStorage.getItem('kart.focusCmp');
       if (!raw) return null;
       localStorage.removeItem('kart.focusCmp');
       const o = JSON.parse(raw);
-      return (o && o.a != null && o.b != null) ? o : null;
+      if (!o || o.a == null || o.b == null) return null;
+      const sid = curSession() ? curSession().id : null;
+      return { sa: o.sa || sid, a: o.a, sb: o.sb || sid, b: o.b };
     } catch (e) { return null; }
+  }
+
+  /* 把 pick 归一化成 {sid, lap}（sid/lap 无效时回退） */
+  function norm(pick, fallbackSid) {
+    const s = sessById(pick && pick.sid) || sessById(fallbackSid) || SESSIONS[SESSIONS.length - 1];
+    if (!s) return null;
+    let lap = pick && pick.lap;
+    if (!lapGet(s.id, lap)) {
+      lap = s.analysis.best ? s.analysis.best.index
+        : (s.analysis.full.length ? s.analysis.full[0].index : null);
+    }
+    return { sid: s.id, lap };
+  }
+  /* B 的默认值：优先同赛道另一个 session 的最快圈（跨节对比），否则本 session 第二快 */
+  function defaultB() {
+    const sA = sessById(A.sid); if (!sA) return null;
+    const sameTrack = SESSIONS.filter(x => x.id !== A.sid && sessionTrack(x) === sessionTrack(sA));
+    const other = sameTrack.map(x => x.analysis.best).filter(b => b)
+      .sort((x, y) => x.time_s - y.time_s)[0];
+    if (other) return { sid: other ? sameTrack.find(x => x.analysis.best === other).id : A.sid, lap: other.index };
+    const pool = sA.analysis.full.filter(l => !l.abnormal && !(sA.analysis.excluded || []).includes(l.index));
+    const sorted = [...(pool.length ? pool : sA.analysis.full)].sort((x, y) => x.time_s - y.time_s);
+    const best = sA.analysis.best;
+    const b = sorted.find(l => best && l.index !== best.index) || sorted[0];
+    return { sid: sA.id, lap: b ? b.index : null };
   }
 
   /* 计算两圈的各通道曲线 */
   function build() {
-    const s = curSession(); if (!s || A == null || B == null) return;
-    const la = lapByIdx(A), lb = lapByIdx(B); if (!la || !lb) return;
-    cmp = compareLaps(s, la, lb, N);
-    // speed 始终计算：Delta / 速度差图的悬停读数要用
-    trA = { speed: lapTrace(s, la, 'speed', N) };
-    trB = { speed: lapTrace(s, lb, 'speed', N) };
+    const sA = sessById(A.sid), sB = sessById(B.sid);
+    if (!sA || !sB || A.lap == null || B.lap == null) return;
+    const la = lapGet(A.sid, A.lap), lb = lapGet(B.sid, B.lap); if (!la || !lb) return;
+    cmp = compareLaps(sA, la, sB, lb, N);
+    trA = { speed: lapTrace(sA, la, 'speed', N) };
+    trB = { speed: lapTrace(sB, lb, 'speed', N) };
     for (const ch in show) {
-      if (show[ch] && ch !== 'speed' && !trA[ch]) { trA[ch] = lapTrace(s, la, ch, N); trB[ch] = lapTrace(s, lb, ch, N); }
+      if (show[ch] && ch !== 'speed' && !trA[ch]) { trA[ch] = lapTrace(sA, la, ch, N); trB[ch] = lapTrace(sB, lb, ch, N); }
     }
   }
 
   function render() {
-    const s = curSession(), box = document.getElementById('content');
-    if (!s) {
+    const cur = curSession(), box = document.getElementById('content');
+    if (!cur) {
       box.innerHTML = `<div class="blank">还没有数据。<br><a href="index.html">去车库上传一个 .vbo 或 .ibt 文件</a></div>`;
       return;
     }
-    const a = s.analysis;
-    if (a.full.length < 2) {
-      box.innerHTML = `<div class="blank">这场只有 <b>${a.full.length}</b> 个完整圈，至少需要 2 圈才能对比。<br>
-        <a href="laps.html">查看圈速</a></div>`;
-      return;
-    }
-    // 从「极限圈速」页点「对比这两圈」过来的：直接选中指定的两圈（读完即清）
+    const sid = cur.id;
+    // 从「极限圈速」页跳转过来的指定两圈（读完即清）
     const want = loadFocusCmp();
-    if (want && lapByIdx(want.a) && lapByIdx(want.b) && want.a !== want.b && a.full.length > 1) { A = want.a; B = want.b; }
-    if (A == null || !lapByIdx(A)) A = a.best ? a.best.index : a.full[0].index;
-    if (B == null || !lapByIdx(B) || B === A) {
-      // 默认从有效圈里挑（跳过自动排除的异常圈）
-      const pool = a.full.filter(l => !l.abnormal && !(a.excluded || []).includes(l.index));
-      const sorted = [...(pool.length ? pool : a.full)].sort((x, y) => x.time_s - y.time_s);
-      B = (sorted.find(l => l.index !== A) || sorted[0]).index;
+    if (want) { A = norm({ sid: want.sa, lap: want.a }, sid); B = norm({ sid: want.sb, lap: want.b }, sid); }
+    A = norm(A, sid);
+    // B 无效时才给默认（优先同赛道另一个 session 的最快圈 = 跨节对比）
+    if (!B || !lapGet(B.sid, B.lap)) B = defaultB();
+    B = norm(B, sid);
+    const sA = sessById(A.sid);
+    if (!sA || !sA.analysis.full.length) { box.innerHTML = `<div class="blank">当前会话没有完整圈。</div>`; return; }
+    if (A.lap == null) A = norm({ sid: sA.id, lap: sA.analysis.best ? sA.analysis.best.index : null }, sid);
+    // B 无效时给默认（跨节最佳）
+    if (B.lap == null || !lapGet(B.sid, B.lap)) { B = defaultB(); B = norm(B, sid); }
+    // A/B 同 session 同圈 → 挪到同 session 次快圈
+    if (B.sid === A.sid && B.lap === A.lap) {
+      const sorted = [...sA.analysis.full].sort((x, y) => x.time_s - y.time_s);
+      const alt = sorted.find(l => l.index !== A.lap);
+      if (alt) B = { sid: A.sid, lap: alt.index };
     }
     build();
 
-    const ir = !!a.isIR;
-    const la = lapByIdx(A), lb = lapByIdx(B);
+    const sB = sessById(B.sid);
+    const la = lapGet(A.sid, A.lap), lb = lapGet(B.sid, B.lap);
+    if (!la || !lb) { box.innerHTML = `<div class="blank">选中的圈数据无效。</div>`; return; }
+    const ir = !!sA.analysis.isIR;
     const diff = lb.time_s - la.time_s;
-    const opts = a.full.map(l => `<option value="${l.index}" ${l.index === A ? 'selected' : ''}>#${l.index} · ${fmtTime(l.time_s, 3)}</option>`).join('');
-    const opts2 = a.full.map(l => `<option value="${l.index}" ${l.index === B ? 'selected' : ''}>#${l.index} · ${fmtTime(l.time_s, 3)}</option>`).join('');
+    const cross = sessionTrack(sA) !== sessionTrack(sB);
+    const sessOpts = SESSIONS.map(x =>
+      `<option value="${x.id}" ${x.id === A.sid ? 'selected' : ''}>${esc(trackZh(sessionTrack(x)))} · ${esc(sDate(x))} · ${x.analysis.validCount != null ? x.analysis.validCount : x.analysis.full.length}圈</option>`).join('');
+    const sessOpts2 = SESSIONS.map(x =>
+      `<option value="${x.id}" ${x.id === B.sid ? 'selected' : ''}>${esc(trackZh(sessionTrack(x)))} · ${esc(sDate(x))} · ${x.analysis.validCount != null ? x.analysis.validCount : x.analysis.full.length}圈</option>`).join('');
+    const lapOpts = (sid2 => {
+      const s = sessById(sid2); if (!s) return '';
+      return s.analysis.full.map(l => `<option value="${l.index}" ${l.index === (sid2 === A.sid ? A.lap : B.lap) ? 'selected' : ''}>#${l.index} · ${fmtTime(l.time_s, 3)}${l.abnormal ? ' ⚠' : ''}</option>`).join('');
+    });
     const chBtns = Object.keys(show).filter(ch => ir || (ch !== 'gear' && ch !== 'rpm' && ch !== 'steer'))
       .map(ch => `<button class="pbtn ov ${show[ch] ? 'on' : ''}" data-ch="${ch}" style="--c:${CHANNELS[ch].color}">${CHANNELS[ch].name}</button>`).join('');
 
     box.innerHTML = `
+      ${cross ? `<div class="notice">⚠ 这两节<b>不是同一个赛道</b>（A=${esc(trackZh(sessionTrack(sA)))} / B=${esc(trackZh(sessionTrack(sB)))}），进度%对比仅供参考，圈速差没有意义。建议选同一个赛道的两节。</div>` : ''}
       <div class="stats">
-        <div class="statbox"><div class="v">${fmtTime(la.time_s, 3)}</div><div class="k">参考圈 #${A}</div></div>
-        <div class="statbox"><div class="v">${fmtTime(lb.time_s, 3)}</div><div class="k">对比圈 #${B}</div></div>
-        <div class="statbox"><div class="v ${deltaCls(diff)}">${deltaTxt(diff)}</div><div class="k">${diff > 0 ? '#' + B + ' 更慢' : diff < 0 ? '#' + B + ' 更快' : '持平'}</div></div>
+        <div class="statbox"><div class="v">${fmtTime(la.time_s, 3)}</div><div class="k">参考圈 #${A.lap}<span class="sub" style="display:block;color:var(--mut);font-size:10.5px">${esc(trackZh(sessionTrack(sA)))} · ${esc(sDate(sA))}</span></div></div>
+        <div class="statbox"><div class="v">${fmtTime(lb.time_s, 3)}</div><div class="k">对比圈 #${B.lap}<span class="sub" style="display:block;color:var(--mut);font-size:10.5px">${esc(trackZh(sessionTrack(sB)))} · ${esc(sDate(sB))}</span></div></div>
+        <div class="statbox"><div class="v ${deltaCls(diff)}">${deltaTxt(diff)}</div><div class="k">${diff > 0 ? '#' + B.lap + ' 更慢' : diff < 0 ? '#' + B.lap + ' 更快' : '持平'}</div></div>
         <div class="statbox"><div class="v ${deltaCls(lb.max_speed - la.max_speed)}">${(lb.max_speed - la.max_speed) >= 0 ? '+' : ''}${(lb.max_speed - la.max_speed).toFixed(1)}</div>
           <div class="k">极速差 km/h</div></div>
       </div>
 
       <div class="card">
-        <h3>选择对比的两圈</h3>
+        <h3>选择对比的两节/圈 <span class="cunit">会话=某一节（某天跑的），可跨节对比：昨天 vs 今天</span></h3>
         <div class="crow">
-          <label class="clab">参考圈 <select id="selA" class="sbsel">${opts}</select></label>
-          <label class="clab">对比圈 <select id="selB" class="sbsel">${opts2}</select></label>
+          <label class="clab">参考
+            <select id="selSessA" class="sbsel">${sessOpts}</select>
+            <select id="selLapA" class="sbsel">${lapOpts(A.sid)}</select></label>
+          <label class="clab">对比
+            <select id="selSessB" class="sbsel">${sessOpts2}</select>
+            <select id="selLapB" class="sbsel">${lapOpts(B.sid)}</select></label>
           <button class="pbtn" id="swapBtn">⇄ 交换</button>
-          <button class="pbtn" id="bestBtn">最快 vs 第二快</button>
+          <button class="pbtn" id="bestBtn">各节最快</button>
         </div>
-        <p class="chint">参考圈通常选你跑得最好的那一圈，对比圈选想找问题的那一圈。</p>
+        <p class="chint">「各节最快」= 参考用当前节的最快圈，对比用<b>另一个 session</b>（同赛道）的最快圈——直接看这节进步了多少。想同节内比，把两个会话选成同一个就行。</p>
       </div>
 
       <div class="card">
-        <h3>时间差 Delta <span class="cunit">曲线往上 = #${B} 丢时间，往下 = #${B} 捡时间</span></h3>
+        <h3>时间差 Delta <span class="cunit">曲线往上 = #${B.lap} 丢时间，往下 = #${B.lap} 捡时间</span></h3>
         <canvas id="cvDelta" class="chart"></canvas>
-        <p class="chint">这是赛车遥测里最重要的一张图。纵轴是「#${B} 相对 #${A} 的累积时间差」，单位秒。
-          曲线<b>陡然上升</b>的那一段就是 #${B} 丢时间最多的地方——去对照下面的油门/刹车图，通常能看到刹车太早、给油太晚或弯心速度不够。</p>
+        <p class="chint">这是赛车遥测里最重要的一张图。纵轴是「#${B.lap} 相对 #${A.lap} 的累积时间差」，单位秒。
+          曲线<b>陡然上升</b>的那一段就是 #${B.lap} 丢时间最多的地方——去对照下面的油门/刹车图，通常能看到刹车太早、给油太晚或弯心速度不够。</p>
       </div>
 
       <div class="card">
-        <h3>速度差 <span class="cunit">#${B} − #${A}</span></h3>
+        <h3>速度差 <span class="cunit">#${B.lap} − #${A.lap}</span></h3>
         <canvas id="cvSpd" class="chart"></canvas>
-        <p class="chint">正值（绿）= #${B} 更快，负值（红）= #${B} 更慢。已做平滑，看趋势即可。</p>
+        <p class="chint">正值（绿）= #${B.lap} 更快，负值（红）= #${B.lap} 更慢。已做平滑，看趋势即可。</p>
       </div>
 
       <div class="card">
-        <h3>通道对比 <span class="cunit">两条线叠加：蓝=#${A}，红=#${B}</span></h3>
+        <h3>通道对比 <span class="cunit">两条线叠加：蓝=#${A.lap}（${esc(trackZh(sessionTrack(sA)))} ${esc(sDate(sA))}），红=#${B.lap}（${esc(trackZh(sessionTrack(sB)))} ${esc(sDate(sB))}）</span></h3>
         <div class="pcgroup" id="chBtns" style="margin-bottom:10px">${chBtns}</div>
         <div id="chArea" class="chgrid"></div>
         ${ir ? '' : '<p class="chint">VBO 数据没有踏板/档位/转向传感器，油门与刹车是由纵向 G 推导的（数值为 G，非开度%）。</p>'}
@@ -117,12 +165,26 @@
         ${metricTable(la, lb, ir)}
       </div>`;
 
-    document.getElementById('selA').onchange = e => { A = +e.target.value; if (B === A) B = null; render(); };
-    document.getElementById('selB').onchange = e => { B = +e.target.value; if (B === A) A = null; render(); };
+    document.getElementById('selSessA').onchange = e => {
+      const s = sessById(e.target.value);
+      A = { sid: s.id, lap: s.analysis.best ? s.analysis.best.index : null };
+      if (B.sid === A.sid) B = defaultB();
+      render();
+    };
+    document.getElementById('selSessB').onchange = e => {
+      const s = sessById(e.target.value);
+      B = { sid: s.id, lap: s.analysis.best ? s.analysis.best.index : null };
+      if (B.sid === A.sid && B.lap === A.lap) B = defaultB();
+      render();
+    };
+    document.getElementById('selLapA').onchange = e => { A = { sid: A.sid, lap: +e.target.value }; render(); };
+    document.getElementById('selLapB').onchange = e => { B = { sid: B.sid, lap: +e.target.value }; render(); };
     document.getElementById('swapBtn').onclick = () => { const t = A; A = B; B = t; render(); };
     document.getElementById('bestBtn').onclick = () => {
-      const sorted = [...a.full].sort((x, y) => x.time_s - y.time_s);
-      A = sorted[0].index; B = sorted[1] ? sorted[1].index : sorted[0].index; render();
+      const sA2 = sessById(A.sid);
+      A = { sid: A.sid, lap: sA2.analysis.best ? sA2.analysis.best.index : null };
+      B = defaultB();
+      render();
     };
     const cb = document.getElementById('chBtns');
     if (cb) cb.onclick = e => {
@@ -134,9 +196,10 @@
   }
 
   function zoneTable() {
+    if (!cmp) return '<p class="chint">无数据</p>';
     const rows = cmp.zones.map(z => `<tr>
       <td>${z.from.toFixed(0)}–${z.to.toFixed(0)}%</td>
-      <td>${z.dAvg.toFixed(0)} m</td>
+      <td>${((z.from + z.to) / 2).toFixed(0)}%</td>
       <td class="${deltaCls(z.gain)}">${deltaTxt(z.gain)}</td>
       <td class="${deltaCls(z.spdAvg)}">${(z.spdAvg >= 0 ? '+' : '') + z.spdAvg.toFixed(1)}</td>
     </tr>`).join('');
@@ -144,13 +207,13 @@
     return `<table class="ctab">
       <thead><tr><th>区间</th><th>位置</th><th>时间差</th><th>平均速度差</th></tr></thead>
       <tbody>${rows}</tbody></table>
-      <p class="chint"><b>#${B} 丢时间最多的三段：</b>${lost}</p>`;
+      <p class="chint"><b>#${B.lap} 丢时间最多的三段：</b>${lost}</p>`;
   }
 
   function metricTable(la, lb, ir) {
     const m1 = la.metrics || {}, m2 = lb.metrics || {};
     const rows = [
-      ['圈速', la.time_s.toFixed(3) + 's', lb.time_s.toFixed(3) + 's', lb.time_s - la.time_s, v => deltaTxt(v)],
+      ['圈速', fmtTime(la.time_s, 3), fmtTime(lb.time_s, 3), lb.time_s - la.time_s, v => deltaTxt(v)],
       ['圈里程', la.distance_m.toFixed(0) + 'm', lb.distance_m.toFixed(0) + 'm', 0, () => '—'],
       ['极速', la.max_speed.toFixed(1), lb.max_speed.toFixed(1), lb.max_speed - la.max_speed, v => (v >= 0 ? '+' : '') + v.toFixed(1)],
       ['最低速', m1.minSpeed != null ? m1.minSpeed.toFixed(1) : '-', m2.minSpeed != null ? m2.minSpeed.toFixed(1) : '-',
@@ -162,7 +225,7 @@
       ['峰值减速', m1.peakBrakeG != null ? m1.peakBrakeG + (ir ? '%' : 'G') : '-', m2.peakBrakeG != null ? m2.peakBrakeG + (ir ? '%' : 'G') : '-', 0, () => '—'],
       ['G-Sum 峰值', m1.gsumPeak != null ? m1.gsumPeak : '-', m2.gsumPeak != null ? m2.gsumPeak : '-', 0, () => '—']
     ];
-    return `<table class="ctab"><thead><tr><th>指标</th><th>#${A}</th><th>#${B}</th><th>差异</th></tr></thead>
+    return `<table class="ctab"><thead><tr><th>指标</th><th>#${A.lap}（${esc(trackZh(sessionTrack(sessById(A.sid))))} ${esc(sDate(sessById(A.sid)))})</th><th>#${B.lap}（${esc(trackZh(sessionTrack(sessById(B.sid))))} ${esc(sDate(sessById(B.sid)))})</th><th>差异</th></tr></thead>
       <tbody>${rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td>
         <td class="${r[3] === 0 ? 'd-zero' : deltaCls(r[3])}">${r[4](r[3])}</td></tr>`).join('')}</tbody></table>`;
   }
@@ -173,13 +236,13 @@
   /* 注意：cfg 必须是「同一个持久对象」——bindTraceChart 会把 view / hoverIdx
      写回这个对象，onView 回调再原样重绘，缩放和悬停才会生效。
      如果每次 getCfg() 都新建一个对象，hover 状态会被丢掉。 */
+  function xAxis(cfg) { cfg.xLabels = cmp.pct; cfg.xFmt = t => t.toFixed(0) + '%'; }
   function drawDelta() {
     const cv = document.getElementById('cvDelta'); if (!cv || !cmp) return;
     const v = view('delta');
     const cfg = {
       height: 320, view: v, zeroLine: true,
-      corners: curSession().analysis.corners, sectors: true,
-      xLabels: cmp.dist, xFmt: t => Math.round(t) + 'm',
+      corners: sessById(A.sid) ? sessById(A.sid).analysis.corners : [], sectors: true,
       series: [
         { name: '', data: cmp.delta.map(x => Math.max(0, x)), color: '#ff6b6b', fill: 'rgba(255,107,107,.25)', width: 0, legend: false },
         { name: '', data: cmp.delta.map(x => Math.min(0, x)), color: '#3fb950', fill: 'rgba(63,185,80,.25)', width: 0, legend: false },
@@ -187,13 +250,13 @@
       ],
       hoverIdx: v.hoverIdx,
       tip: i => [
-        ['位置', cmp.dist[i].toFixed(0) + ' m', '#e6edf3'],
         ['进度', (i / N * 100).toFixed(1) + '%'],
         ['Delta', deltaTxt(cmp.delta[i]), cmp.delta[i] > 0 ? '#ff6b6b' : '#3fb950'],
-        ['#' + A + ' 速度', trA.speed ? trA.speed[i].v.toFixed(1) + ' km/h' : '-'],
-        ['#' + B + ' 速度', trB.speed ? trB.speed[i].v.toFixed(1) + ' km/h' : '-']
+        ['#' + A.lap + ' 速度', trA.speed ? trA.speed[i].v.toFixed(1) + ' km/h' : '-'],
+        ['#' + B.lap + ' 速度', trB.speed ? trB.speed[i].v.toFixed(1) + ' km/h' : '-']
       ]
     };
+    xAxis(cfg);
     drawTraces(cv, cfg);
     bindTraceChart(cv, () => cfg, () => drawTraces(cv, cfg));
     const h3 = cv.closest(".card") ? cv.closest(".card").querySelector("h3") : null;
@@ -204,8 +267,7 @@
     const v = view('spd');
     const cfg = {
       height: 260, view: v, zeroLine: true,
-      corners: curSession().analysis.corners, sectors: true,
-      xLabels: cmp.dist, xFmt: t => Math.round(t) + 'm',
+      corners: sessById(A.sid) ? sessById(A.sid).analysis.corners : [], sectors: true,
       series: [
         { name: '', data: cmp.spdDiff.map(x => Math.max(0, x)), color: '#3fb950', fill: 'rgba(63,185,80,.22)', width: 0, legend: false },
         { name: '', data: cmp.spdDiff.map(x => Math.min(0, x)), color: '#ff6b6b', fill: 'rgba(255,107,107,.22)', width: 0, legend: false },
@@ -213,13 +275,14 @@
       ],
       hoverIdx: v.hoverIdx,
       tip: i => [
-        ['位置', cmp.dist[i].toFixed(0) + ' m', '#e6edf3'],
+        ['进度', (i / N * 100).toFixed(1) + '%'],
         ['速度差', (cmp.spdDiff[i] >= 0 ? '+' : '') + cmp.spdDiff[i].toFixed(1) + ' km/h',
         cmp.spdDiff[i] >= 0 ? '#3fb950' : '#ff6b6b'],
-        ['#' + A, trA.speed ? trA.speed[i].v.toFixed(1) : '-'],
-        ['#' + B, trB.speed ? trB.speed[i].v.toFixed(1) : '-']
+        ['#' + A.lap, trA.speed ? trA.speed[i].v.toFixed(1) : '-'],
+        ['#' + B.lap, trB.speed ? trB.speed[i].v.toFixed(1) : '-']
       ]
     };
+    xAxis(cfg);
     drawTraces(cv, cfg);
     bindTraceChart(cv, () => cfg, () => drawTraces(cv, cfg));
     const h3 = cv.closest(".card") ? cv.closest(".card").querySelector("h3") : null;
@@ -229,8 +292,8 @@
   /* 每个通道一张图，两条线叠加（Garage61 风格） */
   function renderChannels() {
     const box = document.getElementById('chArea'); if (!box) return;
-    const s = curSession(); if (!s) return;
-    const ir = !!s.analysis.isIR;
+    const sA = sessById(A.sid); if (!sA) return;
+    const ir = !!sA.analysis.isIR;
     const chs = Object.keys(show).filter(ch => show[ch] && (ir || (ch !== 'gear' && ch !== 'rpm' && ch !== 'steer')));
     if (!chs.length) { box.innerHTML = '<p class="chint">勾选上方通道即可显示对比图。</p>'; return; }
     box.innerHTML = chs.map(ch => {
@@ -239,7 +302,7 @@
       return `<div class="chcard">
         <div class="chart-head"><span class="cname" style="color:${c.color}">${c.name}</span>
           <span class="cunit">${unit}</span><span class="grow"></span>
-          <span class="cunit">蓝 #${A} · 红 #${B}</span></div>
+          <span class="cunit">蓝 #${A.lap} · 红 #${B.lap}</span></div>
         <canvas id="ch_${ch}" class="chart"></canvas>
       </div>`;
     }).join('');
@@ -250,17 +313,17 @@
       const d1 = trA[ch].map(p => p.v), d2 = trB[ch].map(p => p.v);
       const unit = (!ir && (ch === 'thr' || ch === 'brk')) ? 'G' : c.unit;
       const cfg = {
-        height: 210, view: v, corners: s.analysis.corners, sectors: true,
-        xLabels: trA[ch].map(p => p.d), xFmt: t => Math.round(t) + 'm',
+        height: 210, view: v, corners: sA.analysis.corners, sectors: true,
+        xLabels: trA[ch].map(p => p.pct), xFmt: t => t.toFixed(0) + '%',
         series: [
-          { name: '#' + A, color: '#3b9eff', data: d1, width: 1.7 },
-          { name: '#' + B, color: '#e10600', data: d2, width: 1.7 }
+          { name: '#' + A.lap, color: '#3b9eff', data: d1, width: 1.7 },
+          { name: '#' + B.lap, color: '#e10600', data: d2, width: 1.7 }
         ],
         hoverIdx: v.hoverIdx,
         tip: i => [
-          ['位置', trA[ch][i].d.toFixed(0) + ' m', '#e6edf3'],
-          ['#' + A, d1[i].toFixed(c.dec) + ' ' + unit, '#3b9eff'],
-          ['#' + B, d2[i].toFixed(c.dec) + ' ' + unit, '#e10600'],
+          ['进度', trA[ch][i].pct.toFixed(1) + '%'],
+          ['#' + A.lap, d1[i].toFixed(c.dec) + ' ' + unit, '#3b9eff'],
+          ['#' + B.lap, d2[i].toFixed(c.dec) + ' ' + unit, '#e10600'],
           ['差值', ((d2[i] - d1[i]) >= 0 ? '+' : '') + (d2[i] - d1[i]).toFixed(c.dec),
           (d2[i] - d1[i]) >= 0 ? '#3fb950' : '#ff6b6b']
         ]
