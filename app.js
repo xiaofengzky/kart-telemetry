@@ -119,7 +119,19 @@ const IBT_FIELDS = {
   latA: ['LatAccel'],
   lonA: ['LongAccel', 'LonAccel'],
   lap: ['Lap'],
-  lapPct: ['LapDistPct']
+  lapPct: ['LapDistPct'],
+  // ── 轮胎 / 刹车（仅 iRacing 有）──
+  // 胎面温度分左/中/右三层（车辆坐标系）：LF/LR 外侧=L，RF/RR 外侧=R
+  tt: ['LFtempL', 'LFtempM', 'LFtempR', 'RFtempL', 'RFtempM', 'RFtempR',
+    'LRtempL', 'LRtempM', 'LRtempR', 'RRtempL', 'RRtempM', 'RRtempR'],
+  tc: ['LFtempCL', 'LFtempCM', 'LFtempCR', 'RFtempCL', 'RFtempCM', 'RFtempCR',
+    'LRtempCL', 'LRtempCM', 'LRtempCR', 'RRtempCL', 'RRtempCM', 'RRtempCR'],
+  absCut: ['BrakeABScutPct'],      // ABS 削减比例 0-100
+  absAct: ['BrakeABSactive'],      // ABS 是否激活 0/1
+  ws: ['LFspeed', 'RFspeed', 'LRspeed', 'RRspeed'],   // 每轮转速（算滑移）
+  wp: ['LFpressure', 'RFpressure', 'LRpressure', 'RRpressure'],  // 热胎压 kPa
+  wear: ['LFwearL', 'LFwearM', 'LFwearR', 'RFwearL', 'RFwearM', 'RFwearR',
+    'LRwearL', 'LRwearM', 'LRwearR', 'RRwearL', 'RRwearM', 'RRwearR']
 };
 function parseIBT(buf) {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
@@ -143,8 +155,18 @@ function parseIBT(buf) {
   // 兜底：不区分大小写精确匹配（个别版本大小写不一致）
   const lower = {}; for (const n in vars) lower[n.toLowerCase()] = vars[n];
   const pickCI = names => { for (const n of names) if (lower[n.toLowerCase()]) return lower[n.toLowerCase()]; return null; };
+  // 多通道字段（轮胎温度/胎压/磨损/轮速）：每个名字都要拿到，缺一个就整组放弃
+  const pickAll = names => {
+    const out = [];
+    for (const n of names) { const v = vars[n] || lower[n.toLowerCase()]; if (!v) return []; out.push(v); }
+    return out;
+  };
   const F = {};
-  for (const k in IBT_FIELDS) F[k] = pick(IBT_FIELDS[k]) || pickCI(IBT_FIELDS[k]);
+  for (const k in IBT_FIELDS) {
+    const names = IBT_FIELDS[k];
+    F[k] = (k === 'tt' || k === 'tc' || k === 'ws' || k === 'wp' || k === 'wear')
+      ? pickAll(names) : (pick(names) || pickCI(names));
+  }
   if (!F.lat || !F.lon) throw new Error('缺少经纬度通道（Lat/Lon）—— 该 .ibt 可能不是完整遥测录制');
   // 数据区
   const dataStart = siOffset + siLen;
@@ -155,7 +177,11 @@ function parseIBT(buf) {
   for (let i = 0; i < n; i += dec) {
     const base = dataStart + i * bufLen;
     const rec = {};
-    for (const k in F) rec[k] = F[k] ? ibtReadVal(dv, buf, base + F[k].offset, F[k].type) : null;
+    for (const k in F) {
+      const v = F[k];
+      rec[k] = Array.isArray(v) ? (v.length ? v.map(x => ibtReadVal(dv, buf, base + x.offset, x.type)) : null)
+        : (v ? ibtReadVal(dv, buf, base + v.offset, v.type) : null);
+    }
     ticks.push(rec);
   }
   return { sessionInfo, tickRate, varCount: Object.keys(vars).length, ticks, varNames: Object.keys(vars) };
@@ -188,11 +214,46 @@ function ibtTicksToPoints(ticks) {
       latA: +tk.latA || 0,                // m/s²
       lonA: +tk.lonA || 0,                // m/s²
       lap: +tk.lap || 0,
-      lapPct: +tk.lapPct || 0             // 0-1
+      lapPct: +tk.lapPct || 0,            // 0-1
+      // 轮胎/刹车（仅 iRacing，VBO 这些字段为 null）
+      tt: tk.tt ? tk.tt.map(v => Math.round(v * 10) / 10) : null,   // 4 轮 × (L,M,R) 胎面温度 °C
+      ws: tk.ws ? tk.ws.map(v => Math.round(v * 10) / 10) : null,   // 4 轮转速 m/s
+      abs: tk.absCut != null ? Math.round(tk.absCut * 10) / 10 : (tk.absAct != null ? +tk.absAct : null) // ABS 削减% / 激活
     });
     prevLat = lat; prevLon = lon; prevHdg = hdg != null ? hdg : prevHdg;
   }
   return pts;
+}
+/* 按圈聚合轮胎数据（温度均值 / 胎体均值 / 胎压均值 / 磨损首尾）—— 不进 per-point，避免数据膨胀 */
+function ibtTireByLap(ticks) {
+  const acc = new Map();
+  for (const tk of ticks) {
+    if (!tk.tt && !tk.wear && !tk.tc) continue;
+    const L = +tk.lap || 0;
+    let a = acc.get(L);
+    if (!a) {
+      a = { lap: L, n: 0, tt: new Array(12).fill(0), tc: new Array(12).fill(0), wp: new Array(4).fill(0),
+        wStart: tk.wear ? tk.wear.slice() : null, wEnd: null };
+      acc.set(L, a);
+    }
+    a.n++;
+    if (tk.tt) for (let i = 0; i < 12; i++) a.tt[i] += tk.tt[i];
+    if (tk.tc) for (let i = 0; i < 12; i++) a.tc[i] += tk.tc[i];
+    if (tk.wp) for (let i = 0; i < 4; i++) a.wp[i] += tk.wp[i];
+    if (tk.wear) a.wEnd = tk.wear.slice();
+  }
+  const out = [];
+  for (const a of acc.values()) {
+    if (!a.n) continue;
+    out.push({
+      lap: a.lap,
+      tt: a.tt.map(v => Math.round(v / a.n * 10) / 10),
+      tc: a.tc.map(v => Math.round(v / a.n * 10) / 10),
+      wp: a.wp.map(v => Math.round(v / a.n * 10) / 10),
+      wearStart: a.wStart, wearEnd: a.wEnd
+    });
+  }
+  return out.length ? out : null;
 }
 /* 从 sessionInfo(YAML) 提取赛道名 */
 function ibtTrackName(sessionInfo) {
@@ -1388,7 +1449,8 @@ function loadIBT(file, onDone) {
       const d = file.lastModified ? new Date(file.lastModified) : new Date();
       const date = 'iRacing ' + d.toLocaleDateString('zh-CN') + ' ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
       const s = { id: Date.now() + '_' + SESSIONS.length, name, date, points: pts, source: 'iracing',
-        track: name, offset: { dLat: 0, dLon: 0 }, excluded: [], analysis: analyze(pts) };
+        track: name, offset: { dLat: 0, dLon: 0 }, excluded: [], tireByLap: ibtTireByLap(r.ticks),
+        analysis: analyze(pts) };
       SESSIONS.push(s);
       renderSidebar();
       if (SESSIONS.length === 1) selectSession(s.id);
@@ -1505,6 +1567,7 @@ function dbSave(s) {
         id: s.id, name: s.name, date: s.date, source: s.source || 'vbo',
         points: s.points, offset: s.offset || { dLat: 0, dLon: 0 },
         track: s.track || (s.source === 'iracing' ? s.name : ''),
+        tireByLap: s.tireByLap || null,
         excluded: (s.excluded || []).slice(), savedAt: Date.now()
       });
       tx.oncomplete = res; tx.onerror = () => res();
@@ -1529,7 +1592,7 @@ function rebuildSession(rec) {
   const excluded = Array.isArray(rec.excluded) ? rec.excluded.filter(x => typeof x === 'number') : [];
   const s = { id: rec.id, name: rec.name, date: rec.date, source: rec.source || 'vbo',
     track: rec.track || (rec.source === 'iracing' ? rec.name : ''),
-    points: rec.points, offset: rec.offset || { dLat: 0, dLon: 0 },
+    points: rec.points, offset: rec.offset || { dLat: 0, dLon: 0 }, tireByLap: rec.tireByLap || null,
     excluded, analysis: analyze(rec.points, excluded) };
   return s;
 }

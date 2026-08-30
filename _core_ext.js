@@ -293,6 +293,282 @@ function compareLaps(sA, lapA, sB, lapB, N = 1000) {
   };
 }
 
+/* ---------- 轮胎 & ABS 分析（仅 iRacing） ----------
+   只挑跟「提升圈速」直接相关的三块（避震之类的细节先不做）：
+   ① 长距离胎温：四轮胎面温度 + 内外温差（外倾/胎压诊断）+ 逐圈趋势
+   ② ABS 介入：占刹车时间的比例 + 介入最狠的弯 → 刹车过深的证据
+   ③ 磨损：每圈磨损量 + 内外偏磨
+   tt 顺序：0-2 LF(L,M,R) / 3-5 RF / 6-8 LR / 9-11 RR；
+   「外侧」= 靠车身外的一侧：LF、LR 取 L，RF、RR 取 R。 */
+const WHEELS = [
+  { key: 'LF', name: '左前', mid: 1, outer: 0, inner: 2 },
+  { key: 'RF', name: '右前', mid: 4, outer: 5, inner: 3 },
+  { key: 'LR', name: '左后', mid: 7, outer: 6, inner: 8 },
+  { key: 'RR', name: '右后', mid: 10, outer: 11, inner: 9 }
+];
+const TIRE_WARM = 70, TIRE_HOT = 110;      // 工作窗口下限 / 过热线（GT 通用值）
+function tireAnalysis(s) {
+  if (s.__tire !== undefined) return s.__tire;
+  const pts = s.points, a = s.analysis;
+  if (!(pts.length && pts[0] && pts[0].tt)) { s.__tire = null; return null; }
+  const sum = new Array(12).fill(0), peak = new Array(12).fill(-999);
+  let cnt = 0;
+  const byLap = new Map();
+  for (const p of pts) {
+    if (!p.tt) continue;
+    cnt++;
+    for (let i = 0; i < 12; i++) { sum[i] += p.tt[i]; if (p.tt[i] > peak[i]) peak[i] = p.tt[i]; }
+    let g = byLap.get(p.lap);
+    if (!g) { g = { lap: p.lap, t: new Array(12).fill(0), n: 0, absCnt: 0, brakeCnt: 0, maxSlip: 0 }; byLap.set(p.lap, g); }
+    g.n++;
+    for (let i = 0; i < 12; i++) g.t[i] += p.tt[i];
+    if (p.brk > 0.05) { g.brakeCnt++; if (p.abs > 0.5) g.absCnt++; }
+    if (p.ws && p.vel > 30) {
+      const car = p.vel / 3.6;
+      for (let w = 0; w < 4; w++) { const sl = (car - p.ws[w]) / car; if (sl > g.maxSlip) g.maxSlip = sl; }
+    }
+  }
+  if (!cnt) { s.__tire = null; return null; }
+  const wheels = WHEELS.map(w => ({
+    key: w.key, name: w.name,
+    avg: Math.round(sum[w.mid] / cnt * 10) / 10,
+    peak: Math.round(peak[w.mid] * 10) / 10,
+    outer: Math.round(sum[w.outer] / cnt * 10) / 10,
+    inner: Math.round(sum[w.inner] / cnt * 10) / 10,
+    delta: Math.round((sum[w.outer] - sum[w.inner]) / cnt * 10) / 10
+  }));
+  let brakeCnt = 0, absCnt = 0, absCutSum = 0, deepCnt = 0, maxSlip = 0;
+  const absAt = [];
+  /* ⚠ GT3 重刹时 ABS 几乎总会轻微介入，「有没有触发」没有区分度。
+     所以分开统计：light = 任何介入（>0.5%），deep = 深度介入（削减 >5%，说明刹车过深）。 */
+  for (const p of pts) {
+    if (p.brk > 0.05) {
+      brakeCnt++;
+      if (p.abs > 0.5) { absCnt++; absCutSum += p.abs; }
+      if (p.abs > 5) { deepCnt++; absAt.push({ pct: (p.lapPct || 0) * 100, cut: p.abs }); }
+    }
+    if (p.ws && p.vel > 30) {
+      const car = p.vel / 3.6;
+      for (let w = 0; w < 4; w++) { const sl = (car - p.ws[w]) / car; if (sl > maxSlip) maxSlip = sl; }
+    }
+  }
+  const abs = {
+    brakePct: brakeCnt ? Math.round(absCnt / brakeCnt * 1000) / 10 : 0,     // 轻介入占比
+    deepPct: brakeCnt ? Math.round(deepCnt / brakeCnt * 1000) / 10 : 0,     // 深度介入占比（>5%）
+    avgCut: absCnt ? Math.round(absCutSum / absCnt * 10) / 10 : 0,
+    maxSlip: Math.round(maxSlip * 1000) / 10
+  };
+  const buckets = {};
+  for (const e of absAt) { const b = Math.floor(e.pct / 5) * 5; buckets[b] = (buckets[b] || 0) + e.cut; }
+  const cornerOf = pct => {
+    let best = null, bd = 1e9;
+    for (const c of (a.corners || [])) { const d = Math.abs(c.progress_pct - pct); if (d < bd) { bd = d; best = c; } }
+    return bd <= 8 ? best : null;
+  };
+  abs.hotspots = Object.keys(buckets).map(k => +k).sort((x, y) => buckets[y] - buckets[x]).slice(0, 3)
+    .map(b => { const c = cornerOf(b + 2.5); return { pct: b, cornerId: c ? c.id : null, cut: Math.round(buckets[b]) }; });
+  const laps = [...byLap.values()].map(g => ({
+    lap: g.lap,
+    temp: Math.round((g.t[1] + g.t[4] + g.t[7] + g.t[10]) / 4 / g.n * 10) / 10,
+    absPct: g.brakeCnt ? Math.round(g.absCnt / g.brakeCnt * 1000) / 10 : 0,
+    maxSlip: Math.round(g.maxSlip * 1000) / 10
+  })).sort((x, y) => x.lap - y.lap);
+  /* 磨损：iRacing 给的是剩余比例（0.97 = 剩 97%），差值是百分比的小数形式。
+     换算成「百分点 ×100」更直观，否则短 session 里全是 0。 */
+  const wear = { perLap: [], total: 0, outerInner: 0 };
+  if (s.tireByLap && s.tireByLap.length) {
+    for (const r of s.tireByLap) {
+      if (!r.wearStart || !r.wearEnd) continue;
+      const mid = [1, 4, 7, 10].map(i => (r.wearStart[i] - r.wearEnd[i]) * 100);
+      const outer = [0, 5, 6, 11].map(i => (r.wearStart[i] - r.wearEnd[i]) * 100);
+      const inner = [2, 3, 8, 9].map(i => (r.wearStart[i] - r.wearEnd[i]) * 100);
+      wear.perLap.push({
+        lap: r.lap,
+        mid: Math.round(mid.reduce((x, y) => x + y, 0) / 4 * 1000) / 1000,
+        outer: Math.round(outer.reduce((x, y) => x + y, 0) / 4 * 1000) / 1000,
+        inner: Math.round(inner.reduce((x, y) => x + y, 0) / 4 * 1000) / 1000
+      });
+    }
+    if (wear.perLap.length) {
+      wear.total = Math.round(wear.perLap.reduce((t, r) => t + r.mid, 0) * 100) / 100;
+      const o = wear.perLap.reduce((t, r) => t + r.outer, 0) / wear.perLap.length;
+      const inn = wear.perLap.reduce((t, r) => t + r.inner, 0) / wear.perLap.length;
+      wear.outerInner = Math.round((o - inn) * 100) / 100;
+    }
+  }
+  const v = [];
+  const hot = wheels.reduce((m, w) => w.peak > m.peak ? w : m, wheels[0]);
+  const coldW = wheels.reduce((m, w) => w.avg < m.avg ? w : m, wheels[0]);
+  const skew = wheels.reduce((m, w) => Math.abs(w.delta) > Math.abs(m.delta) ? w : m, wheels[0]);
+  if (hot.peak > TIRE_HOT) v.push({ t: 'warn', txt: `<b>${hot.name}峰温 ${hot.peak}°C</b> 超过 ${TIRE_HOT}°C——长距离会掉速，这一侧负荷偏大（查胎压或外倾）。` });
+  else v.push({ t: 'good', txt: `四轮峰温最高 ${hot.peak}°C（${hot.name}），都在 ${TIRE_HOT}°C 以内，没有明显过热。` });
+  if (coldW.avg < TIRE_WARM) v.push({ t: 'warn', txt: `${coldW.name}平均仅 <b>${coldW.avg}°C</b>，低于 ${TIRE_WARM}°C——没进工作窗口，抓地没用满。` });
+  if (Math.abs(skew.delta) >= 12) {
+    v.push({
+      t: skew.delta > 0 ? 'warn' : 'mid',
+      txt: `<b>${skew.name}外侧比内侧${skew.delta > 0 ? '高' : '低'} ${Math.abs(skew.delta)}°C</b>——${skew.delta > 0
+        ? '典型的外倾不足或胎压偏低，外侧在硬扛，每圈都在丢抓地。' : '外倾偏大或胎压偏高，接地面偏内侧。'}`
+    });
+  } else v.push({ t: 'good', txt: `四轮内外温差都在 12°C 以内（最大 ${skew.name} ${skew.delta > 0 ? '+' : ''}${skew.delta}°C），设定基本合理。` });
+  if (abs.deepPct > 20) v.push({ t: 'warn', txt: `<b>ABS 深度介入占刹车时间 ${abs.deepPct}%</b>（削减超过 5%）——刹车过深，试着把峰值刹车收一点、力度前移，出弯反而更快。` });
+  else if (abs.deepPct > 8) v.push({ t: 'mid', txt: `ABS 深度介入占刹车时间 ${abs.deepPct}%（轻触 ${abs.brakePct}%，平均削减 ${abs.avgCut}%），大部分刹车只是轻触，属正常范围。` });
+  else v.push({ t: 'good', txt: `ABS 深度介入仅 ${abs.deepPct}%（轻触 ${abs.brakePct}%），刹车力度控制得不错。` });
+  if (abs.maxSlip > 12) v.push({ t: 'warn', txt: `检测到最大滑移 <b>${abs.maxSlip}%</b>（轮速明显慢于车速）——有锁死/打滑，这部分是白丢的速度。` });
+  if (wear.perLap.length && Math.abs(wear.total) >= 0.05) {
+    if (Math.abs(wear.outerInner) >= 1) v.push({ t: 'warn', txt: `<b>偏磨明显</b>：外侧比内侧多磨 ${Math.abs(wear.outerInner).toFixed(2)} 个百分点（${wear.outerInner > 0 ? '外侧' : '内侧'}），长距离会越来越难开。` });
+    else v.push({ t: 'good', txt: `内外磨损差 ${Math.abs(wear.outerInner).toFixed(2)} 个百分点，磨得挺均匀。` });
+  } else if (wear.perLap.length) {
+    v.push({ t: 'mid', txt: `全程磨损只有 ${Math.abs(wear.total).toFixed(2)} 个百分点——这段太短，磨损数据参考意义不大（要看长距离衰减，建议跑一整节再分析）。` });
+  }
+  s.__tire = { hasTire: true, wheels, abs, laps, wear, verdicts: v, TIRE_WARM, TIRE_HOT, samples: cnt };
+  return s.__tire;
+}
+
+/* ---------- 规则问答引擎（本地，不联网） ----------
+   「我还能提升哪儿」这类问题 → 关键词匹配 → 用已有分析数据算答案。 */
+const QA_RULES = [
+  {
+    id: 'improve', kw: ['提升', '进步', '还能', '哪里', '哪儿', '怎么练', '建议', '快一点', '更快', '提升点'],
+    title: '我还能提升多少？',
+    run(s, ctx) {
+      const idl = ctx.idl;
+      if (!idl) return { txt: '有效圈不足 2 圈，算不出理论极限。', tone: 'mid' };
+      const pct = idl.gain / idl.bestTime * 100;
+      const top = [...idl.segs].sort((x, y) => y.gain - x.gain).slice(0, 3)
+        .map(sg => { const loc = segLocation(s, sg.from, sg.to); return `${loc.sector} ${loc.label}（−${sg.gain.toFixed(3)}s，最快 #${sg.lap}）`; });
+      return {
+        tone: pct > 2 ? 'warn' : pct > 0.8 ? 'mid' : 'good',
+        txt: `理论上还能捡 <b>${fmtTime(idl.gain)}</b>（最快圈 ${fmtTime(idl.bestTime)} 的 ${pct.toFixed(1)}%）。<br>最值得练的三段：${top.join('；')}`,
+        link: { href: 'ideal.html', label: '去极限圈速看细节' }
+      };
+    }
+  },
+  {
+    id: 'sector', kw: ['赛段', '分段', 's1', 's2', 's3', '哪段', '哪一段', '段慢', '最慢', '慢在哪', '哪一段慢'],
+    title: '我最慢的是哪一段？',
+    run(s) {
+      const a = s.analysis, sec = a.sectors || [];
+      if (!sec.length) return { txt: '没有赛段数据。', tone: 'mid' };
+      const w = sec.reduce((m, x) => x.std_s > m.std_s ? x : m, sec[0]);
+      return {
+        tone: w.std_s > 0.4 ? 'warn' : 'good',
+        txt: `S1/S2/S3 平均：<b>${sec.map(x => x.name + ' ' + fmtTime(x.mean_s, 3)).join(' · ')}</b>。<br>最不稳定的是 <b>${w.name}</b>（波动 ±${w.std_s}s）——先固定走线再求快。`,
+        link: { href: 'laps.html', label: '看分段表现' }
+      };
+    }
+  },
+  {
+    id: 'brake', kw: ['刹车', '制动', '刹车点', 'abs', '锁死', '早刹', '晚刹'],
+    title: '刹车有什么问题？',
+    run(s) {
+      const a = s.analysis, bc = a.brakeConsistency && a.brakeConsistency[0];
+      const tir = tireAnalysis(s);
+      let txt = '';
+      if (bc) txt += `刹车点最不稳的位置在赛道 <b>${bc.progress}%</b>，每圈波动 <b>±${bc.std}%</b>。`;
+      if (tir) {
+        txt += `<br>ABS 深度介入占刹车时间 <b>${tir.abs.deepPct}%</b>（轻触 ${tir.abs.brakePct}%，平均削减 ${tir.abs.avgCut}%）`;
+        if (tir.abs.hotspots.length) {
+          const h = tir.abs.hotspots[0];
+          txt += `，最深的一段在 <b>${h.pct}–${h.pct + 5}%</b>${h.cornerId != null ? '（T' + h.cornerId + ' 附近）' : ''}`;
+        }
+        txt += '。';
+        if (tir.abs.maxSlip > 12) txt += `<br>还检测到最大滑移 <b>${tir.abs.maxSlip}%</b>，有锁死/打滑。`;
+      } else if (txt) txt += '<br>（这份数据没有 ABS/轮速通道）';
+      const deep = tir && tir.abs.deepPct > 20;
+      const tone = (bc && bc.std > 2) || deep ? 'warn' : 'good';
+      return {
+        tone, txt: txt || '刹车数据不足。',
+        tip: (bc && bc.std > 2) ? '先把这个刹车点固定下来——每圈都在同一位置刹车，圈速立刻会稳。'
+          : deep ? '试着把峰值刹车收 3~5%，留一点 ABS 之前的余量，出弯反而更快。' : '',
+        link: { href: 'laps.html', label: '看刹车点一致性' }
+      };
+    }
+  },
+  {
+    id: 'tire', kw: ['胎温', '轮胎温度', '温度', '过热', '胎压', '外倾', '工作窗口'],
+    title: '轮胎温度正常吗？',
+    run(s) {
+      const t = tireAnalysis(s);
+      if (!t) return { tone: 'mid', txt: '这份数据没有轮胎温度通道（卡丁车 VBO 没有胎温传感器，iRacing 的 .ibt 才有）。' };
+      return {
+        tone: t.verdicts.some(v => v.t === 'warn') ? 'warn' : 'good',
+        txt: t.verdicts.filter(v => /°C|温差/.test(v.txt)).map(v => '· ' + v.txt).join('<br>') || '轮胎数据不足。',
+        link: { href: 'summary.html', label: '看轮胎面板' }
+      };
+    }
+  },
+  {
+    id: 'wear', kw: ['磨损', '磨', '胎耗', '衰减', '长距离', '耐用'],
+    title: '轮胎磨损怎么样？',
+    run(s) {
+      const t = tireAnalysis(s);
+      if (!t || !t.wear.perLap.length) return { tone: 'mid', txt: '这份数据没有磨损通道。' };
+      const w = t.wear;
+      const per = w.perLap.reduce((t, r) => t + r.mid, 0) / w.perLap.length;
+      const short = Math.abs(w.total) < 0.05;
+      return {
+        tone: short ? 'mid' : (Math.abs(w.outerInner) >= 1 ? 'warn' : 'good'),
+        txt: `平均每圈掉 <b>${per.toFixed(2)}</b> 个百分点胎面（四轮中层），全程累计 <b>${w.total.toFixed(2)}</b>。<br>` +
+          (short ? '这段太短，磨损基本看不出来——想看长距离衰减，得跑一整节再分析。'
+            : `内外磨损差 <b>${Math.abs(w.outerInner).toFixed(2)}</b> 个百分点（${w.outerInner > 0 ? '外侧多' : '内侧多'}）——${Math.abs(w.outerInner) >= 1 ? '偏磨会让长距离越来越难开，建议看外倾/胎压。' : '磨得挺均匀。'}`),
+        link: { href: 'summary.html', label: '看磨损趋势' }
+      };
+    }
+  },
+  {
+    id: 'consistency', kw: ['一致', '稳定', '波动', '标准差', '忽快忽慢', '不稳'],
+    title: '我的一致性如何？',
+    run(s) {
+      const a = s.analysis;
+      return {
+        tone: a.core_std > 0.6 ? 'warn' : a.core_std > 0.35 ? 'mid' : 'good',
+        txt: `核心圈标准差 <b>±${a.core_std}s</b>（${a.grade}），核心均速 ${fmtTime(a.core_avg, 3)}，最快 ${fmtTime(a.best_time, 3)}。<br>${a.core_std > 0.6 ? '节奏比较散，先求稳再求快。' : a.core_std > 0.35 ? '中等水平，最快的提升方式是固定刹车点。' : '很稳，可以在极限边缘多试晚刹。'}`,
+        link: { href: 'laps.html', label: '看每一圈' }
+      };
+    }
+  },
+  {
+    id: 'corner', kw: ['弯', '弯道', '出弯', '入弯', '弯心', '转向不足', '推头'],
+    title: '哪个弯丢速最多？',
+    run(s) {
+      const cs = [...s.analysis.corners].sort((x, y) => y.speed_loss - x.speed_loss).slice(0, 3);
+      if (!cs.length) return { tone: 'mid', txt: '没识别到弯角。' };
+      return {
+        tone: 'warn',
+        txt: `丢速最多的弯：<b>${cs.map(c => `T${c.id} 损失 ${c.speed_loss} km/h（入 ${c.entry_speed} → 弯心 ${c.apex_speed} → 出 ${c.exit_speed}）`).join('；')}</b>。<br>出弯速度是最直接的圈速来源——晚刹 + 弯心保速 + 早给油。`,
+        link: { href: 'track.html', label: '去赛道图看位置' }
+      };
+    }
+  },
+  {
+    id: 'throttle', kw: ['油门', '给油', '全油门', '加速', '太晚'],
+    title: '出弯给油够早吗？',
+    run(s) {
+      const a = s.analysis;
+      const best = a.best, m = best && best.metrics ? best.metrics : null;
+      if (!m) return { tone: 'mid', txt: '没有油门/事件数据。' };
+      return {
+        tone: m.flatout_pct < 30 ? 'warn' : 'good',
+        txt: `最快圈全油门占比 <b>${m.flatout_pct}%</b>，刹车点 ${m.brakeCount} 个，峰值减速 ${m.peakBrakeG}${a.isIR ? '%' : 'G'}，G-Sum 峰值 ${m.gsumPeak}。<br>${m.flatout_pct < 30 ? '全油门占比偏低，出弯可以再早一点给油（平滑加压，别一脚到底）。' : '全油门占比不错，接下来抠给油时机。'}`,
+        link: { href: 'telemetry.html', label: '看油门曲线' }
+      };
+    }
+  }
+];
+/* 问题 → 答案 */
+function askQuestion(s, q, ctx = {}) {
+  if (!s) return null;
+  const text = String(q || '').toLowerCase();
+  let best = null, bestScore = 0;
+  for (const r of QA_RULES) {
+    let sc = 0;
+    for (const k of r.kw) if (text.includes(k.toLowerCase())) sc += k.length >= 3 ? 2 : 1;
+    if (sc > bestScore) { bestScore = sc; best = r; }
+  }
+  if (!best) return { fallback: true, suggestions: QA_RULES.map(r => r.title) };
+  return { rule: best, ans: best.run(s, ctx) };
+}
+
 /* ---------- 赛道名显示（英文 → 中文） ----------
    iRacing 的 sessionInfo 给的是英文赛道名（TrackDisplayName），
    这里映射成中文，没收录的原样显示。 */

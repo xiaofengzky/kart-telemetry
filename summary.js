@@ -16,6 +16,7 @@
     const validLaps = a.full.filter(l => !l.abnormal && !(a.excluded || []).includes(l.index));
     const idl = validLaps.length >= 2 ? idealLap(s, 50, validLaps) : null;
     const bm = best && best.metrics ? best.metrics : null;
+    const tire = tireAnalysis(s);          // 无轮胎通道时返回 null（VBO）
 
     /* ---------- 教练诊断（规则引擎，按严重程度排序） ---------- */
     const diags = [];
@@ -104,6 +105,16 @@
       </div>
 
       <div class="card">
+        <h3>💬 直接问 <span class="cunit">本地规则引擎，不联网、不需要 API key</span></h3>
+        <div class="qarow">
+          <input id="qaInput" type="text" placeholder="比如：我还能提升哪里？刹车有什么问题？轮胎温度正常吗？">
+          <button class="pbtn" id="qaAsk">问</button>
+        </div>
+        <div class="qachips">${QA_RULES.map(r => `<button class="chip" data-q="${esc(r.title)}">${esc(r.title)}</button>`).join('')}</div>
+        <div id="qaAns">${qaHtml(s, '我还能提升多少', idl)}</div>
+      </div>
+
+      <div class="card">
         <h3>🎓 教练诊断</h3>
         ${diags.map(d => `<div class="diag ${d.t}">${d.txt}</div>`).join('')}
       </div>
@@ -157,6 +168,11 @@
       </div>
 
       <div class="card">
+        <h3>🔥 轮胎与刹车 <span class="cunit">长距离胎温 · ABS 介入 · 磨损（仅 iRacing）</span></h3>
+        ${tireCard(s, tire)}
+      </div>
+
+      <div class="card">
         <h3>📋 今日训练清单 <span class="cunit">按优先级排好，练完一项划掉一项</span></h3>
         <div class="tasklist">${taskHtml}</div>
       </div>
@@ -164,11 +180,12 @@
       <div class="card">
         <h3>怎么看这页</h3>
         <p class="chint">
-          ① <b>教练诊断</b>：一句话告诉你现在的核心问题是什么；<br>
-          ② <b>提升机会</b>：还有多少时间可捡、按 S1/S2/S3 拆到哪个赛段；<br>
-          ③ <b>最值得练的 3 段</b>：具体到「S2 · T3 → T4」这种位置，直接去练；<br>
-          ④ <b>弯道与习惯</b>：哪个弯丢速最多、哪个弯可以再晚刹；<br>
-          ⑤ <b>训练清单</b>：把上面的结论排成今天要做的几件事，做完再来跑一场，对比圈速是否变快。
+          ① <b>直接问</b>：输入问题（或点预置问题），本地算出答案，不联网；<br>
+          ② <b>教练诊断</b>：一句话告诉你现在的核心问题是什么；<br>
+          ③ <b>提升机会</b>：还有多少时间可捡、按 S1/S2/S3 拆到哪个赛段；<br>
+          ④ <b>最值得练的 3 段</b>：具体到「S2 · T3 → T4」这种位置，直接去练；<br>
+          ⑤ <b>轮胎与刹车</b>：胎温有没有进窗口、内外温差、ABS 是不是踩太深、磨损均不均；<br>
+          ⑥ <b>训练清单</b>：把上面的结论排成今天要做的几件事，做完再来跑一场，对比圈速是否变快。
         </p>
       </div>`;
 
@@ -191,6 +208,117 @@
       if (bc) markers.push({ pct: bc.progress, color: '#e10600', r: 5, label: `刹车点 ±${bc.std.toFixed(1)}%` });
       trackSketch(sumCv, s, { base: 'dark', laps: a.full.map(l => l.index), markers, corners: true });
     }
+
+    /* 问答：输入 / 预置问题 / 回车 */
+    const qi = document.getElementById('qaInput');
+    const doAsk = () => {
+      const q = (qi.value || '').trim();
+      if (!q) return;
+      document.getElementById('qaAns').innerHTML = qaHtml(s, q, idl);
+    };
+    if (qi) {
+      document.getElementById('qaAsk').onclick = doAsk;
+      qi.onkeydown = e => { if (e.key === 'Enter') doAsk(); };
+    }
+    document.querySelectorAll('#content .qachips .chip').forEach(c => {
+      c.onclick = () => {
+        if (qi) qi.value = c.dataset.q;
+        document.getElementById('qaAns').innerHTML = qaHtml(s, c.dataset.q, idl);
+      };
+    });
+    document.querySelectorAll('#content .qasug').forEach(x => {
+      x.onclick = () => {
+        if (qi) qi.value = x.textContent;
+        document.getElementById('qaAns').innerHTML = qaHtml(s, x.textContent, idl);
+      };
+    });
+
+    /* 轮胎趋势图 */
+    const tt = document.getElementById('tireTrend');
+    if (tt && tire && tire.laps.length > 1) drawTireTrend(tt, tire);
+  }
+
+  /* 问答答案渲染 */
+  function qaHtml(s, q, idl) {
+    const res = askQuestion(s, q, { idl });
+    if (!res) return '';
+    if (res.fallback) {
+      return `<div class="qabox mid"><div class="qatext">这个我还不会，试试这些：</div>
+        <div>${res.suggestions.map(x => `<span class="qasug">${esc(x)}</span>`).join('')}</div></div>`;
+    }
+    const ans = res.ans || {};
+    return `<div class="qabox ${ans.tone || 'mid'}">
+      <div class="qatitle">${esc(res.rule.title)}</div>
+      <div class="qatext">${ans.txt || ''}</div>
+      ${ans.tip ? `<div class="qatip">💡 ${ans.tip}</div>` : ''}
+      ${ans.link ? `<a class="qalink" href="${ans.link.href}">${esc(ans.link.label)} →</a>` : ''}
+    </div>`;
+  }
+
+  /* 轮胎与刹车卡片 */
+  function tireCard(s, t) {
+    if (!t) {
+      return `<p class="chint">这份数据没有轮胎/ABS 通道——卡丁车 VBO 文件物理上没有胎温、轮速传感器；
+        iRacing 的 .ibt 才有。想要这块分析，去跑一场 iRacing 再导出遥测。</p>`;
+    }
+    const rows = t.wheels.map(w => `<tr>
+      <td><b>${w.name}</b></td>
+      <td>${w.avg}°C</td>
+      <td class="${w.peak > t.TIRE_HOT ? 'd-pos' : ''}">${w.peak}°C</td>
+      <td>${w.outer}°C</td>
+      <td>${w.inner}°C</td>
+      <td class="${Math.abs(w.delta) >= 12 ? 'd-pos' : ''}">${w.delta > 0 ? '+' : ''}${w.delta}°C</td>
+    </tr>`).join('');
+    const hot = t.abs.hotspots.length
+      ? t.abs.hotspots.map(h => `${h.pct}–${h.pct + 5}%${h.cornerId != null ? '（T' + h.cornerId + '）' : ''}`).join('、') : '—';
+    const wearRows = t.wear.perLap.slice(0, 12).map(w =>
+      `<tr><td>#${w.lap}</td><td>${w.mid.toFixed(2)}</td><td>${w.outer.toFixed(2)}</td><td>${w.inner.toFixed(2)}</td></tr>`).join('');
+    return `<div class="evwrap">
+      <div class="evcol">
+        <h4>四轮胎温（全程）</h4>
+        <table class="ctab"><thead><tr><th>轮</th><th>平均</th><th>峰值</th><th>外侧</th><th>内侧</th><th>外−内</th></tr></thead>
+          <tbody>${rows}</tbody></table>
+        <p class="chint">工作窗口约 ${t.TIRE_WARM}–${t.TIRE_HOT}°C。外−内为正=外侧更热（外倾不足或胎压低）；为负=内侧更热（外倾偏大或胎压高）。</p>
+      </div>
+      <div class="evcol">
+        <h4>ABS 与滑移</h4>
+        <table class="ctab"><tbody>
+          <tr><td>轻触 ABS 占刹车</td><td><b>${t.abs.brakePct}%</b></td></tr>
+          <tr><td>深度介入（削减&gt;5%）</td><td class="${t.abs.deepPct > 20 ? 'd-pos' : ''}"><b>${t.abs.deepPct}%</b></td></tr>
+          <tr><td>平均削减</td><td><b>${t.abs.avgCut}%</b></td></tr>
+          <tr><td>最大滑移</td><td class="${t.abs.maxSlip > 12 ? 'd-pos' : ''}"><b>${t.abs.maxSlip}%</b></td></tr>
+          <tr><td>介入最深的位置</td><td><b>${hot}</b></td></tr>
+        </tbody></table>
+        <p class="chint">GT3 重刹时 ABS 轻触属于正常；<b>深度介入占比高</b>才说明刹车踩过头（轮胎在打滑边界）。</p>
+      </div>
+    </div>
+    ${t.laps.length > 1 ? `<h4 style="margin:14px 0 6px;font-size:12px">长距离胎温趋势（每圈平均）</h4>
+      <canvas id="tireTrend" class="chart"></canvas>` : ''}
+    ${wearRows ? `<h4 style="margin:14px 0 6px;font-size:12px">磨损（每圈掉几个百分点）</h4>
+      <table class="ctab"><thead><tr><th>圈</th><th>中层</th><th>外侧</th><th>内侧</th></tr></thead><tbody>${wearRows}</tbody></table>
+      <p class="chint">全程累计 <b>${t.wear.total.toFixed(2)}</b> 个百分点，内外磨损差 <b>${Math.abs(t.wear.outerInner).toFixed(2)}</b>（${t.wear.outerInner > 0 ? '外侧多' : '内侧多'}）。</p>` : ''}
+    <div style="margin-top:10px">${t.verdicts.map(v => `<div class="diag ${v.t}" style="margin-bottom:6px">${v.txt}</div>`).join('')}</div>`;
+  }
+
+  /* 长距离胎温 + ABS 趋势 */
+  function drawTireTrend(cv, t) {
+    const laps = t.laps.slice(-30);
+    const cfg = {
+      height: 220,
+      xLabels: laps.map(l => l.lap), xFmt: v => '#' + v,
+      series: [
+        { name: '胎温 °C', color: '#e3a008', data: laps.map(l => l.temp), width: 2 },
+        { name: 'ABS 深度介入 %', color: '#e10600', data: laps.map(l => l.absPct), width: 1.4 }
+      ],
+      tip: i => [
+        ['圈', '#' + laps[i].lap],
+        ['平均胎温', laps[i].temp.toFixed(1) + ' °C', '#e3a008'],
+        ['ABS', laps[i].absPct.toFixed(1) + '%', '#e10600'],
+        ['最大滑移', laps[i].maxSlip.toFixed(1) + '%']
+      ]
+    };
+    drawTraces(cv, cfg);
+    bindTraceChart(cv, () => cfg, () => drawTraces(cv, cfg));
   }
 
   /* 赛段涵盖弯角（给 S1/S2/S3 用）：T3–T7 / T5 / — */

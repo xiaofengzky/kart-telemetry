@@ -582,3 +582,24 @@ button.taskrow[data-i]:active{background:rgba(59,158,255,.10)}
   padding:2px 8px;font-size:11.5px;cursor:pointer;transition:.14s;margin-left:auto}
 .gedit:hover{border-color:var(--blue);color:var(--blue)}
 .gname-unnamed{color:var(--mut);font-style:italic}
+
+/* ---- 问答 / 轮胎面板 ---- */
+.qarow{display:flex;gap:8px;align-items:center;margin:2px 0 8px}
+.qarow input[type=text]{flex:1;min-width:180px;background:var(--bg3);border:1px solid var(--line);color:var(--txt);
+  border-radius:7px;padding:8px 11px;font-size:13px}
+.qarow input[type=text]:focus{border-color:var(--blue);outline:none}
+.qachips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.qachips .chip{border:1px solid var(--line);background:var(--bg3);color:var(--mut);border-radius:14px;
+  padding:4px 11px;font-size:12px;cursor:pointer;transition:.14s}
+.qachips .chip:hover{border-color:var(--blue);color:var(--blue)}
+.qabox{border:1px solid var(--line);border-radius:9px;padding:11px 13px;background:var(--bg3)}
+.qabox.warn{border-color:rgba(225,6,0,.4);background:rgba(225,6,0,.07)}
+.qabox.mid{border-color:rgba(227,160,8,.4);background:rgba(227,160,8,.07)}
+.qabox.good{border-color:rgba(63,185,80,.4);background:rgba(63,185,80,.07)}
+.qatitle{font-size:13px;font-weight:700;margin-bottom:5px}
+.qatext{font-size:13px;line-height:1.7}
+.qatip{font-size:12.5px;color:var(--amber);margin-top:6px}
+.qalink{display:inline-block;margin-top:8px;font-size:12px;color:var(--blue);text-decoration:none}
+.qasug{display:inline-block;margin:4px 5px 0 0;padding:4px 9px;border-radius:12px;background:var(--bg2);
+  border:1px solid var(--line);font-size:11.5px;color:var(--mut);cursor:pointer}
+.qasug:hover{border-color:var(--blue);color:var(--blue)}
