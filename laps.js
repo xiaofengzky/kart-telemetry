@@ -10,12 +10,20 @@
     if (selLapIdx == null || !a.full.some(l => l.index === selLapIdx)) selLapIdx = a.best ? a.best.index : a.full[0].index;
 
     const fastest = a.best_time;
+    const excl = a.excluded || [];
     const sorted = [...a.full].sort((x, y) => x.time_s - y.time_s);
     const median = sorted[sorted.length >> 1].time_s;
+    const notice = [];
+    if (a.junkCount > 0) notice.push(`已自动丢弃 <b>${a.junkCount}</b> 个无效段（里程不足中位圈一半，起终点附近停车/蹭线/断数据，不算圈）`);
+    const abn = a.full.filter(l => l.abnormal);
+    if (abn.length) notice.push(`已自动排除 <b>${abn.length}</b> 个异常圈（比中位慢 8% 以上，多半是暖胎圈/出场圈/失误圈），统计里不再算它们——下方 🗑/↺ 可手动调整`);
+    if (excl.length) notice.push(`你手动排除了 <b>${excl.length}</b> 圈（点 ↺ 可恢复）`);
 
     box.innerHTML = `
+      ${notice.length ? `<div class="notice">${notice.join('；')}。</div>` : ''}
       <div class="stats">
-        <div class="statbox"><div class="v">${a.full.length}</div><div class="k">完整圈</div></div>
+        <div class="statbox"><div class="v">${a.validCount}/${a.full.length}</div><div class="k">有效圈/识别圈</div>
+          <div class="sub">异常与手动排除的不计入</div></div>
         <div class="statbox"><div class="v">${a.best_time != null ? fmtTime(a.best_time, 3) : '-'}</div>
           <div class="k">最快圈 <span style="color:var(--mut)">#${a.best ? a.best.index : '-'}</span></div></div>
         <div class="statbox"><div class="v">${fmtTime(a.core_avg, 3)}</div><div class="k">核心均速</div>
@@ -26,17 +34,21 @@
       </div>
 
       <div class="card">
-        <h3>每一圈</h3>
+        <h3>每一圈 <span class="cunit">🗑=手动排除（不参与任何统计） · 灰色=已排除</span></h3>
         <div class="tscroll"><table class="ctab">
           <thead><tr><th>圈</th><th>圈速</th><th>差距</th><th>S1</th><th>S2</th><th>S3</th>
-            <th>极速</th><th>最低速</th><th>刹车点</th><th>全油门</th><th>峰值减速</th><th>G-Sum</th></tr></thead>
+            <th>极速</th><th>最低速</th><th>刹车点</th><th>全油门</th><th>峰值减速</th><th>G-Sum</th><th></th></tr></thead>
           <tbody>${sorted.map(l => {
       const m = l.metrics || {};
-      const d = l.time_s - fastest;
-      const slow = l.time_s > median * 1.06;
+      const d = l.time_s - (fastest != null ? fastest : l.time_s);
+      const isEx = excl.includes(l.index);
       const st = l.sector_times || [0, 0, 0];
-      return `<tr class="${l.index === (a.best ? a.best.index : -1) ? 'best' : ''}">
-              <td><b>#${l.index}</b>${slow ? ' <span title="明显偏慢，可能是出场圈/失误圈" style="color:var(--amber)">⚠</span>' : ''}</td>
+      const cls = [l.index === (a.best ? a.best.index : -1) ? 'best' : '', l.abnormal ? 'abn' : '', isEx ? 'exd' : ''].join(' ');
+      const mark = l.abnormal
+        ? `<span title="异常圈：比中位慢 ${l.abnormalPct != null ? l.abnormalPct.toFixed(0) : '?'}%，已自动排除（暖胎/出场圈？）" style="color:var(--amber)">⚠</span>`
+        : (isEx ? '<span title="手动排除" style="color:var(--mut)">✕</span>' : '');
+      return `<tr class="${cls}">
+              <td><b>#${l.index}</b> ${mark}</td>
               <td>${fmtTime(l.time_s, 3)}</td>
               <td class="${deltaCls(d)}">${d < 0.0005 ? '最快' : deltaTxt(d)}</td>
               <td>${fmtTime(st[0], 2)}</td><td>${fmtTime(st[1], 2)}</td><td>${fmtTime(st[2], 2)}</td>
@@ -46,9 +58,11 @@
               <td>${m.flatout_pct != null ? m.flatout_pct + '%' : '-'}</td>
               <td>${m.peakBrakeG != null ? m.peakBrakeG + (ir ? '%' : 'G') : '-'}</td>
               <td>${m.gsumPeak != null ? m.gsumPeak : '-'}</td>
+              <td><button class="exbtn" data-lap="${l.index}" title="${isEx ? '恢复这圈参与统计' : '手动排除这圈（不算进任何统计）'}">${isEx ? '↺' : '🗑'}</button></td>
             </tr>`;
     }).join('')}</tbody></table></div>
-        <p class="chint">带 <b style="color:var(--amber)">⚠</b> 的圈比中位圈慢 6% 以上，多半是出场圈或失误圈，做一致性分析时建议排除。<b>S1/S2/S3</b> 是 F1 风格的三段赛段时间（赛道三等分）。</p>
+        <p class="chint"><b style="color:var(--amber)">⚠</b> = 自动检测出的异常圈（比中位慢 8% 以上，多半是暖胎圈/出场圈/失误圈），已默认排除出所有统计；
+          <b style="color:var(--mut)">✕</b> = 你手动排除的圈。都可用 <b>↺</b> 恢复。<b>S1/S2/S3</b> 是 F1 风格三段赛段时间。</p>
       </div>
 
       ${a.sectors && a.sectors.length ? `
@@ -91,6 +105,18 @@
 
     const es = document.getElementById('evSel');
     if (es) es.onchange = e => { selLapIdx = +e.target.value; render(); };
+    /* 手动排除 / 恢复某圈：改 session 的 excluded → 重新 analyze → 保存 IndexedDB */
+    document.querySelectorAll('#content .exbtn').forEach(btn => {
+      btn.onclick = () => {
+        const i = +btn.dataset.lap;
+        const ex = s.excluded || (s.excluded = []);
+        const k = ex.indexOf(i);
+        if (k >= 0) ex.splice(k, 1); else ex.push(i);
+        s.analysis = analyze(s.points, ex);
+        dbSave(s);
+        render();
+      };
+    });
   }
 
   function eventTable(ir) {

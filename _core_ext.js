@@ -714,9 +714,10 @@ function renderLapChips(box, laps, sel, onToggle, markWarn) {
   if (!box) return;
   const median = laps.length ? [...laps].map(l => l.time_s).sort((a, b) => a - b)[laps.length >> 1] : 0;
   box.innerHTML = laps.map(l => {
-    const warn = markWarn && median && l.time_s > median * 1.06;
+    const warn = markWarn && (l.abnormal === true || (median && l.time_s > median * 1.06));
+    const exc = l.abnormal === true;
     return `<button class="lapchip ${sel.includes(l.index) ? 'on' : ''} ${warn ? 'warn' : ''}" data-lap="${l.index}"
-      title="${warn ? '比中位圈慢 6% 以上，可能是出场圈/失误圈' : ''}">#${l.index}<span class="lt">${fmtTime(l.time_s, 2)}</span></button>`;
+      title="${exc ? '异常圈：比中位圈慢 ' + (l.abnormalPct != null ? l.abnormalPct.toFixed(0) : '?') + '%，已自动排除出统计（暖胎/出场圈？）' : (warn ? '比中位圈慢 6% 以上，可能是出场圈/失误圈' : '')}">#${l.index}<span class="lt">${fmtTime(l.time_s, 2)}</span>${exc ? '<span class="lt" style="color:var(--amber)">⚠</span>' : ''}</button>`;
   }).join('');
   box.onclick = e => {
     const b = e.target.closest ? e.target.closest('.lapchip') : null;

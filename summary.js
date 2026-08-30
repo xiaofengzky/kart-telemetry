@@ -12,7 +12,9 @@
     const median = sorted[sorted.length >> 1].time_s;
     const slow = a.full.filter(l => l.time_s > median * 1.06);
     const best = a.best;
-    const idl = a.full.length >= 2 ? idealLap(s, 50) : null;
+    // 极限圈速只基于有效圈（自动/手动排除的异常圈不参与）
+    const validLaps = a.full.filter(l => !l.abnormal && !(a.excluded || []).includes(l.index));
+    const idl = validLaps.length >= 2 ? idealLap(s, 50, validLaps) : null;
     const bm = best && best.metrics ? best.metrics : null;
 
     /* ---------- 教练诊断（规则引擎，按严重程度排序） ---------- */
@@ -26,7 +28,7 @@
     if (a.core_std > 0.6) diags.push({ t: 'warn', txt: `核心圈标准差 <b>${a.core_std.toFixed(2)}s</b>，节奏偏散——先求稳再求快，稳定 10 圈比你偶尔快 0.3s 更值钱。` });
     else if (a.core_std > 0.35) diags.push({ t: 'mid', txt: `核心圈标准差 ${a.core_std.toFixed(2)}s，中等水平，最快的提升方式是<b>固定刹车点</b>。` });
     else diags.push({ t: 'good', txt: `核心圈标准差仅 ${a.core_std.toFixed(2)}s，一致性很好，可以在极限边缘多试晚刹。` });
-    if (slow.length) diags.push({ t: 'warn', txt: `有 <b>${slow.length}</b> 圈比中位圈慢 6% 以上（多半是出场圈/失误圈），分析时建议先排除它们。` });
+    if (slow.length) diags.push({ t: 'warn', txt: `有 <b>${slow.length}</b> 圈比中位圈慢（暖胎圈/出场圈/失误圈），已<b>自动排除</b>出统计——如果某圈排错了，去<a href="laps.html" style="color:var(--blue)">圈速</a>页点 ↺ 恢复。` });
     if (!diags.length) diags.push({ t: 'good', txt: '数据太少，先多跑几圈再来听总结。' });
 
     /* ---------- 提升机会：S1/S2/S3 可捡分解 ---------- */
@@ -78,7 +80,7 @@
     });
     if (worstC.length) tasks.push({ icon: '🅿️', t: `晚刹进 T${worstC[0].id}`, d: `入弯→弯心损失 ${worstC[0].speed_loss} km/h，是全场丢速最多的弯，试着更晚、更狠地刹车`, href: 'track.html', cta: '看赛道图' });
     if (idl) tasks.push({ icon: '✨', t: '看理论走线', d: `极限圈速 ${fmtTime(idl.idealTime)}，比最快圈快 ${(idl.gain * 1000).toFixed(0)}ms——赛道图上金色虚线就是理论最优路径`, href: 'track.html', cta: '看走线' });
-    if (slow.length) tasks.push({ icon: '🧹', t: '排除慢圈再分析', d: `${slow.length} 圈比中位慢 6% 以上，先勾掉它们，结论才准`, href: 'laps.html', cta: '去圈速' });
+    if (slow.length) tasks.push({ icon: '🧹', t: '检查被排除的圈', d: `${slow.length} 圈被自动排除（比中位慢），去圈速页确认排得对不对，误排就点 ↺ 恢复`, href: 'laps.html', cta: '去圈速' });
     if (bm) tasks.push({ icon: '⚡', t: `把全油门占比 ${bm.flatout_pct}% 往上提`, d: '出弯早给油、平滑加压，是最直接的圈速来源', href: 'telemetry.html', cta: '看油门曲线' });
     const taskHtml = tasks.slice(0, 5).map(t =>
       `<div class="taskrow">

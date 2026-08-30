@@ -52,7 +52,9 @@
     if (want && lapByIdx(want.a) && lapByIdx(want.b) && want.a !== want.b && a.full.length > 1) { A = want.a; B = want.b; }
     if (A == null || !lapByIdx(A)) A = a.best ? a.best.index : a.full[0].index;
     if (B == null || !lapByIdx(B) || B === A) {
-      const sorted = [...a.full].sort((x, y) => x.time_s - y.time_s);
+      // 默认从有效圈里挑（跳过自动排除的异常圈）
+      const pool = a.full.filter(l => !l.abnormal && !(a.excluded || []).includes(l.index));
+      const sorted = [...(pool.length ? pool : a.full)].sort((x, y) => x.time_s - y.time_s);
       B = (sorted.find(l => l.index !== A) || sorted[0]).index;
     }
     build();

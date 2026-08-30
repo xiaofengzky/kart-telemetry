@@ -350,7 +350,7 @@ function lapEvents(points, cum, driveG, latg, a, b, dist, vmax) {
     }
   };
 }
-function analyze(points) {
+function analyze(points, excluded) {
   const n = points.length;
   const xy = project(points);
   const cum = [0];
@@ -417,17 +417,49 @@ function analyze(points) {
     });
   }
   const full = laps.filter(l => l.time_s > 5);
+  /* ---------- 异常圈自动检测（用户反馈：#1 蹭线 35m 被当成最快圈，统计全被污染） ----------
+     分两类：
+     ① junk（假圈/不完整圈）：里程不足中位圈的一半——起终点线附近停车/蹭线/断数据，
+        根本不是一圈，直接从 full 移除（记入 a.junkCount，不进统计也不显示）。
+     ② abnormal（异常圈）：里程正常但耗时远高于中位——暖胎圈/从 pit 出发/失误圈，
+        保留显示（灰色 ⚠），但默认不参与任何统计。
+     检测只在 ≥3 圈时启用（圈太少时中位数不可靠，全部保留）。 */
+  const exclSet = new Set(excluded || []);
+  let junkCount = 0, autoExcluded = 0;
+  if (full.length >= 3) {
+    const dSorted = [...full].map(l => l.distance_m).sort((x, y) => x - y);
+    const medianDist = dSorted[dSorted.length >> 1];
+    const tSorted = [...full].map(l => l.time_s).sort((x, y) => x - y);
+    const medianT = tSorted[tSorted.length >> 1];
+    const q1 = tSorted[Math.floor(tSorted.length * .25)], q3 = tSorted[Math.floor(tSorted.length * .75)];
+    // ⚠ IQR 要钳制上限：圈很少时（3~4 圈）慢圈自己会把 q3-q1 撑大，检测阈值跟着抬升导致漏检。
+    const iqr = Math.min(Math.max(0.001, q3 - q1), medianT * .1);
+    for (const l of full) {
+      if (l.distance_m < medianDist * .45) { l.junk = true; junkCount++; }
+    }
+    for (const l of full) {
+      if (l.junk) continue;
+      const slowPct = (l.time_s - medianT) / medianT * 100;
+      // 慢于 中位 + max(1.5×IQR, 8%) → 异常圈
+      if (l.time_s > medianT + Math.max(1.5 * iqr, medianT * .08)) {
+        l.abnormal = true; l.abnormalPct = slowPct;
+        if (!exclSet.has(l.index)) autoExcluded++;
+      }
+    }
+  }
+  const displayLaps = full.filter(l => !l.junk);          // full 只留真实圈（含异常圈）
+  const validLaps = displayLaps.filter(l => !l.abnormal && !exclSet.has(l.index));  // 统计用
   const maxV = Math.max(...points.map(p => p.vel));
-  for (const l of full) {
+  for (const l of displayLaps) {
     const ev = lapEvents(points, cum, driveG, latg, l.startIdx, l.endIdx, l.distance_m, maxV);
     l.brakeEvents = ev.brakes; l.throttleEvents = ev.throttles; l.metrics = ev.metrics;
   }
-  const best = full.length ? full.reduce((m, l) => l.time_s < m.time_s ? l : m) : null;
-  const times = full.map(l => l.time_s);
+  const best = validLaps.length ? validLaps.reduce((m, l) => l.time_s < m.time_s ? l : m) : null;
+  const times = validLaps.map(l => l.time_s);
   const avg = times.reduce((s, v) => s + v, 0) / (times.length || 1);
   const std = times.length ? Math.sqrt(times.reduce((s, v) => s + (v - avg) ** 2, 0) / times.length) : 0;
   const core = times.filter(t => Math.abs(t - avg) <= 1.6 * std);
-  const coreLaps = full.filter(l => Math.abs(l.time_s - avg) <= 1.6 * std);
+  const coreLaps = validLaps.filter(l => Math.abs(l.time_s - avg) <= 1.6 * std);
   const coreAvg = core.length ? core.reduce((s, v) => s + v, 0) / core.length : avg;
   const coreStd = core.length > 1 ? Math.sqrt(core.reduce((s, v) => s + (v - coreAvg) ** 2, 0) / core.length) : 0;
   const grade = coreStd < 0.25 ? 'A 极佳' : coreStd < 0.5 ? 'B 良好' : coreStd < 0.9 ? 'C 一般' : 'D 波动大';
@@ -503,27 +535,29 @@ function analyze(points) {
   // F1 风格三段赛段（S1/S2/S3）：每圈三个赛段时间 + 跨圈汇总。
   // 用户反馈"用百分比看不清赛道上的提升点"，三段式更贴近赛事节奏。
   const sectors = [];
-  if (full.length) {
+  if (displayLaps.length) {
     const st = [[], [], []];
-    for (const l of full) {
+    for (const l of displayLaps) {
       const a = l.startIdx, b = l.endIdx, base = cum[a], D = l.distance_m;
       const bd = [D / 3, 2 * D / 3, D];
       const idx = bd.map(t => { let ti = a; while (ti < b && (cum[ti] - base) < t) ti++; return ti; });
       const t0 = points[a].t;
       const sts = [points[idx[0]].t - t0, points[idx[1]].t - points[idx[0]].t, points[idx[2]].t - points[idx[1]].t];
       l.sector_times = sts;                       // 供每圈表格显示 S1/S2/S3
-      st[0].push(sts[0]); st[1].push(sts[1]); st[2].push(sts[2]);
+      if (!l.abnormal && !exclSet.has(l.index)) { st[0].push(sts[0]); st[1].push(sts[1]); st[2].push(sts[2]); }
     }
     for (let k = 0; k < 3; k++) {
-      const v = st[k], m = v.reduce((s, x) => s + x, 0) / v.length;
+      const v = st[k];
+      if (!v.length) continue;
+      const m = v.reduce((s, x) => s + x, 0) / v.length;
       const sd = Math.sqrt(v.reduce((s, x) => s + (x - m) ** 2, 0) / v.length);
       sectors.push({ sector: k + 1, name: 'S' + (k + 1), mean_s: Math.round(m * 100) / 100, std_s: Math.round(sd * 100) / 100, best_s: Math.round(Math.min(...v) * 100) / 100 });
     }
   }
   const worst = [];
-  // 波动区：跨圈同进度速度标准差
+  // 波动区：跨圈同进度速度标准差（只用有效圈，异常圈会拉高噪声）
   const bands = 100, bs = Array.from({ length: bands + 1 }, () => []);
-  for (const l of full) {
+  for (const l of validLaps) {
     const a = l.startIdx, b = l.endIdx, D = l.distance_m;
     for (let pct = 0; pct <= bands; pct++) {
       const target = cum[a] + pct / bands * D;
@@ -563,13 +597,19 @@ function analyze(points) {
   }
   const vels = points.map(p => p.vel);
   return {
-    laps, full, best, vmin: Math.min(...vels), vmax: Math.max(...vels),
+    laps, full: displayLaps, best, vmin: Math.min(...vels), vmax: Math.max(...vels),
     best_time: best ? Math.round(best.time_s * 100) / 100 : null,
     avg_lap: Math.round(avg * 100) / 100, core_avg: Math.round(coreAvg * 100) / 100,
     core_std: Math.round(coreStd * 100) / 100, grade, gradeCol,
     corners, speedProfile: sp, gProfile: gp, longGProfile: dp, pedalProfile: pp, isIR,
     sectors, worstZones, brakeConsistency, xy, cum,
-    latg, driveG            // 全量（覆盖所有点），供任意圈的 G 通道分析 / 多圈 Delta 使用
+    latg, driveG,           // 全量（覆盖所有点），供任意圈的 G 通道分析 / 多圈 Delta 使用
+    // 异常圈信息：junkCount=自动丢弃的假圈(里程过短)，abnormal=自动标记的异常圈(慢于中位)，
+    // excluded=用户手动排除的圈 index，validCount=参与统计的有效圈数
+    junkCount: junkCount || 0,
+    abnormal: displayLaps.filter(l => l.abnormal).map(l => l.index),
+    excluded: (excluded || []).slice(),
+    validCount: validLaps.length
   };
 }
 
@@ -1348,7 +1388,7 @@ function loadIBT(file, onDone) {
       const d = file.lastModified ? new Date(file.lastModified) : new Date();
       const date = 'iRacing ' + d.toLocaleDateString('zh-CN') + ' ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
       const s = { id: Date.now() + '_' + SESSIONS.length, name, date, points: pts, source: 'iracing',
-        offset: { dLat: 0, dLon: 0 }, analysis: analyze(pts) };
+        offset: { dLat: 0, dLon: 0 }, excluded: [], analysis: analyze(pts) };
       SESSIONS.push(s);
       renderSidebar();
       if (SESSIONS.length === 1) selectSession(s.id);
@@ -1368,7 +1408,7 @@ function loadFile(file, onDone) {
       : (parsed.comments.track || file.name.replace(/\.vbo$/i, ''));
     const date = parsed.comments.beijing || ('UTC ' + parsed.points[0].t.toFixed(0));
     const id = Date.now() + '_' + SESSIONS.length;
-    const s = { id, name, date, points: parsed.points, source: 'vbo', offset: { dLat: 0, dLon: 0 }, analysis: analyze(parsed.points) };
+    const s = { id, name, date, points: parsed.points, source: 'vbo', offset: { dLat: 0, dLon: 0 }, excluded: [], analysis: analyze(parsed.points) };
     SESSIONS.push(s);
     renderSidebar();
     if (SESSIONS.length === 1) selectSession(id);
@@ -1463,7 +1503,8 @@ function dbSave(s) {
       const tx = idb.transaction('sessions', 'readwrite');
       tx.objectStore('sessions').put({
         id: s.id, name: s.name, date: s.date, source: s.source || 'vbo',
-        points: s.points, offset: s.offset || { dLat: 0, dLon: 0 }, savedAt: Date.now()
+        points: s.points, offset: s.offset || { dLat: 0, dLon: 0 },
+        excluded: (s.excluded || []).slice(), savedAt: Date.now()
       });
       tx.oncomplete = res; tx.onerror = () => res();
     });
@@ -1484,8 +1525,10 @@ function dbDelete(id) {
   try { idb.transaction('sessions', 'readwrite').objectStore('sessions').delete(id); } catch (e) { }
 }
 function rebuildSession(rec) {
+  const excluded = Array.isArray(rec.excluded) ? rec.excluded.filter(x => typeof x === 'number') : [];
   const s = { id: rec.id, name: rec.name, date: rec.date, source: rec.source || 'vbo',
-    points: rec.points, offset: rec.offset || { dLat: 0, dLon: 0 }, analysis: analyze(rec.points) };
+    points: rec.points, offset: rec.offset || { dLat: 0, dLon: 0 },
+    excluded, analysis: analyze(rec.points, excluded) };
   return s;
 }
 /* 从数据库恢复会话 */

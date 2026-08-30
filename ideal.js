@@ -39,11 +39,12 @@
     const s = curSession(), box = document.getElementById('content');
     if (!s) { box.innerHTML = `<div class="blank">还没有数据。<br><a href="index.html">去车库上传一个 .vbo 或 .ibt 文件</a></div>`; return; }
     const a = s.analysis;
-    if (a.full.length < 2) {
+    const excl = a.excluded || [];
+    if (a.full.filter(l => !l.abnormal && !excl.includes(l.index)).length < 2) {
       box.innerHTML = `<div class="blank">这场只有 <b>${a.full.length}</b> 个完整圈。<br>
         极限圈速需要 2 圈以上才能拼出有意义的理论最快圈。</div>`; return;
     }
-    if (!use) use = a.full.map(l => l.index);
+    if (!use) use = a.full.filter(l => !l.abnormal && !(a.excluded || []).includes(l.index)).map(l => l.index);
     // 过滤掉已被删除/不存在的圈
     use = use.filter(i => a.full.some(l => l.index === i));
     if (!use.length) use = a.full.map(l => l.index);

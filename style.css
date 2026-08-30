@@ -549,3 +549,10 @@ button.taskrow[data-i]:active{background:rgba(59,158,255,.10)}
 .sumlegend .lg{display:inline-flex;align-items:center;gap:4px}
 .sumlegend .lg i{width:9px;height:9px;border-radius:2px;display:inline-block}
 @media(max-width:820px){ .summap canvas{height:220px} }
+
+/* ---- 异常圈 / 手动排除 ---- */
+.ctab tr.abn td{opacity:.62;background:rgba(227,160,8,.05)}
+.ctab tr.exd td{opacity:.45;text-decoration:line-through}
+.exbtn{border:1px solid var(--line);background:var(--bg3);color:var(--mut);border-radius:6px;
+  width:28px;height:26px;line-height:1;font-size:12px;cursor:pointer;transition:.14s}
+.exbtn:hover{border-color:var(--amber);color:var(--amber)}
