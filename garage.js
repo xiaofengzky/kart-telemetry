@@ -57,12 +57,15 @@
   function gitem(s) {
     const a = s.analysis;
     const ir = s.source === 'iracing';
-    const zh = trackZh(sessionTrack(s) || '未分类赛道');
+    const track = sessionTrack(s);
+    const zh = trackZh(track || '未分类赛道');
+    const unnamed = !track;
     return `<div class="gitem ${s.id === curId ? 'on' : ''}" data-id="${s.id}">
       <div class="gmain">
         <div class="gtop">
-          <span class="gname">${esc(zh)} <span class="gdate2">${esc(String(s.date).replace(/^iRacing /, ''))}</span></span>
+          <span class="gname ${unnamed ? 'gname-unnamed' : ''}" title="${unnamed ? '未分类赛道，点 ✏️ 改名' : ''}">${esc(zh)} <span class="gdate2">${esc(String(s.date).replace(/^iRacing /, ''))}</span></span>
           <i class="src ${ir ? 'iracing' : 'vbo'}">${ir ? 'iRacing' : 'VBOX'}</i>
+          <button class="gedit" data-rename="${s.id}" title="修改赛道名（用于卡丁车 VBOX 改名：英文或中文都行，留空=未分类）">✏️ 改名</button>
         </div>
         <div class="gmeta">
           <span>最快 <b>${a.best_time != null ? fmtTime(a.best_time, 2) : '-'}</b></span>
@@ -95,6 +98,21 @@
         if (i >= 0) SESSIONS.splice(i, 1);
         if (curId === id) { curId = SESSIONS.length ? SESSIONS[SESSIONS.length - 1].id : null; saveCurId(curId); }
         renderSessionBar(render);
+        render();
+      };
+    });
+    /* ✏️ 改名：用于卡丁车 VBOX / iRacing 自定义赛道名。留空=归「未分类赛道」 */
+    list.querySelectorAll('[data-rename]').forEach(b => {
+      b.onclick = e => {
+        e.stopPropagation();
+        const id = b.dataset.rename;
+        const s = SESSIONS.find(x => x.id === id);
+        const cur = s.track || '';
+        const nv = prompt('给这节设置赛道名（英文或中文都行；常见 iRacing 赛道会自动翻译；留空=归「未分类赛道」）：', cur);
+        if (nv == null) return;                                  // 取消
+        const v = nv.trim();
+        s.track = v;
+        dbSave(s);
         render();
       };
     });

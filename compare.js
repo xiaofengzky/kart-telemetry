@@ -103,10 +103,12 @@
       `<option value="${x.id}" ${x.id === A.sid ? 'selected' : ''}>${esc(trackZh(sessionTrack(x)))} · ${esc(sDate(x))} · ${x.analysis.validCount != null ? x.analysis.validCount : x.analysis.full.length}圈</option>`).join('');
     const sessOpts2 = SESSIONS.map(x =>
       `<option value="${x.id}" ${x.id === B.sid ? 'selected' : ''}>${esc(trackZh(sessionTrack(x)))} · ${esc(sDate(x))} · ${x.analysis.validCount != null ? x.analysis.validCount : x.analysis.full.length}圈</option>`).join('');
-    const lapOpts = (sid2 => {
+    /* ⚠ 之前用一个闭包 lapOpts(sid) 复用，但 sid2 === A.sid ? A.lap : B.lap
+       在 A.sid === B.sid 时两边都选 A.lap，导致 B 的下拉显示错的圈。直接各自生成。 */
+    const lapOptsFor = (sid2, selLap) => {
       const s = sessById(sid2); if (!s) return '';
-      return s.analysis.full.map(l => `<option value="${l.index}" ${l.index === (sid2 === A.sid ? A.lap : B.lap) ? 'selected' : ''}>#${l.index} · ${fmtTime(l.time_s, 3)}${l.abnormal ? ' ⚠' : ''}</option>`).join('');
-    });
+      return s.analysis.full.map(l => `<option value="${l.index}" ${l.index === selLap ? 'selected' : ''}>#${l.index} · ${fmtTime(l.time_s, 3)}${l.abnormal ? ' ⚠' : ''}</option>`).join('');
+    };
     const chBtns = Object.keys(show).filter(ch => ir || (ch !== 'gear' && ch !== 'rpm' && ch !== 'steer'))
       .map(ch => `<button class="pbtn ov ${show[ch] ? 'on' : ''}" data-ch="${ch}" style="--c:${CHANNELS[ch].color}">${CHANNELS[ch].name}</button>`).join('');
 
@@ -125,10 +127,10 @@
         <div class="crow">
           <label class="clab">参考
             <select id="selSessA" class="sbsel">${sessOpts}</select>
-            <select id="selLapA" class="sbsel">${lapOpts(A.sid)}</select></label>
+            <select id="selLapA" class="sbsel">${lapOptsFor(A.sid, A.lap)}</select></label>
           <label class="clab">对比
             <select id="selSessB" class="sbsel">${sessOpts2}</select>
-            <select id="selLapB" class="sbsel">${lapOpts(B.sid)}</select></label>
+            <select id="selLapB" class="sbsel">${lapOptsFor(B.sid, B.lap)}</select></label>
           <button class="pbtn" id="swapBtn">⇄ 交换</button>
           <button class="pbtn" id="bestBtn">各节最快</button>
         </div>
