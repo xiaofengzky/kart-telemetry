@@ -299,110 +299,241 @@ function compareLaps(sA, lapA, sB, lapB, N = 1000) {
    ② ABS 介入：占刹车时间的比例 + 介入最狠的弯 → 刹车过深的证据
    ③ 磨损：每圈磨损量 + 内外偏磨
    tt 顺序：0-2 LF(L,M,R) / 3-5 RF / 6-8 LR / 9-11 RR；
-   「外侧」= 靠车身外的一侧：LF、LR 取 L，RF、RR 取 R。 */
+   「外侧」= 靠车身外的一侧：LF、LR 取 L，RF、RR 取 R。
+
+   ⚠ 真实 .ibt 实测（296 GT3 @Watkins Glen / Road America）发现的坑，代码里都做了防御：
+   · BrakeABScutPct 在这车上恒为 1.0（不刹车也是 1），完全没有信息量 → 必须做「常量通道检测」，
+     常量则弃用，改用 BrakeABSactive（布尔，实测刹车中 44.5% / 15.5% 触发，是真信号）。
+   · LFtempC*(表面温度) 只有部分文件会写，Road America 那份全程恒 34.5°C → 同样要检测，
+     无效时回退到 LFtemp*(胎体温度)，并在界面上标明用的是哪个。
+   · LFwear* 在练习/测试节里全程只有一个取值（不模拟磨损）→ 检测无变化就不再显示磨损。
+   · 温度阈值不能写死：胎体温度和表面温度差 30°C 以上，必须按来源分别给窗口。 */
 const WHEELS = [
   { key: 'LF', name: '左前', mid: 1, outer: 0, inner: 2 },
   { key: 'RF', name: '右前', mid: 4, outer: 5, inner: 3 },
   { key: 'LR', name: '左后', mid: 7, outer: 6, inner: 8 },
   { key: 'RR', name: '右后', mid: 10, outer: 11, inner: 9 }
 ];
-const TIRE_WARM = 70, TIRE_HOT = 110;      // 工作窗口下限 / 过热线（GT 通用值）
+/* ⚠ 实测两个真文件后确认：LFtempC*(表面温度) 是**冻结快照**——全场一个值不变
+   （Watkins Glen 恒 90.58，Road America 恒 34.55，唯一值个数 = 1）。
+   所以：工作窗口 / 逐圈趋势只能用 LFtemp*(胎体温度，实时变化，唯一值 5961 个)；
+   表面温度只在「三层 L/M/R 有真实差异」时才拿来看内外偏磨（外倾签名）。
+   窗口按来源分开给：胎体比表面低 20~30°C，用同一个阈值会全错。 */
+const TIRE_WIN = {
+  surface: { warm: 85, hot: 110, label: '表面温度' },
+  carcass: { warm: 70, hot: 100, label: '胎体温度' }
+};
+const R1 = v => Math.round(v * 10) / 10;
+/* 判断一组通道是不是「活的」：全程极差太小说明游戏根本没在写（或恒定），不能拿来分析 */
+function chanLive(mn, mx, minRange) {
+  return mn != null && mx != null && isFinite(mn) && isFinite(mx) && (mx - mn) >= minRange;
+}
 function tireAnalysis(s) {
   if (s.__tire !== undefined) return s.__tire;
   const pts = s.points, a = s.analysis;
   if (!(pts.length && pts[0] && pts[0].tt)) { s.__tire = null; return null; }
+
+  /* ── 0. 有效飞行圈集合：出场圈/回场圈/异常圈的胎温会把均值带偏，
+        这里只取「有效圈」覆盖到的点，得到的才是真正的长距离工作温度 ── */
+  const valid = new Set();
+  for (const l of (a.full || [])) if (!l.abnormal && !(s.excluded || []).some(x => x === l.index)) valid.add(l.index);
+  const useValid = valid.size > 0;
+
+  /* ── 1. 通道活性检测（一遍扫描拿 min/max）── */
+  const mnT = new Array(12).fill(null), mxT = new Array(12).fill(null);
+  const mnC = new Array(12).fill(null), mxC = new Array(12).fill(null);
+  let mnAbs = null, mxAbs = null;
+  for (const p of pts) {
+    if (p.tt) for (let i = 0; i < 12; i++) { const v = p.tt[i]; if (v == null || !isFinite(v)) continue;
+      if (mnT[i] == null || v < mnT[i]) mnT[i] = v; if (mxT[i] == null || v > mxT[i]) mxT[i] = v; }
+    if (p.tc) for (let i = 0; i < 12; i++) { const v = p.tc[i]; if (v == null || !isFinite(v)) continue;
+      if (mnC[i] == null || v < mnC[i]) mnC[i] = v; if (mxC[i] == null || v > mxC[i]) mxC[i] = v; }
+  }
+  const ttLive = chanLive(Math.min(...mnT.filter(x => x != null)), Math.max(...mxT.filter(x => x != null)), 5);
+  let cLo = null, cHi = null;
+  if (pts.some(p => p.tc)) {
+    const f = mnC.filter(x => x != null);
+    if (f.length) { cLo = Math.min(...f); cHi = Math.max(...mxC.filter(x => x != null)); }
+  }
+  const tcLive = chanLive(cLo, cHi, 5);
+  /* 胎温（工作窗口/趋势）只能来源自实时通道 → 表面温度是冻结快照，恒定不能用 */
+  const src = 'carcass';
+  const win = TIRE_WIN[src];
+  const TIRE_WARM = win.warm, TIRE_HOT = win.hot;
+  /* 内外偏磨（外倾/胎压签名）优先用表面温度——它的 L/M/R 三层差更能反映接地面。
+     但前提是三层真的有差异；Road America 那份 tc 三层全等 34.55（冷胎开局快照），
+     这种情况退回车体温度算。 */
+  let geo = 'tt';
+  if (pts.some(p => p.tc)) {
+    let ok = 0;
+    for (let w = 0; w < 4; w++) {
+      const i0 = w * 3, vals = [mnC[i0], mnC[i0 + 1], mnC[i0 + 2]].filter(x => x != null);
+      if (vals.length === 3 && Math.max(...vals) - Math.min(...vals) >= 3) ok++;
+    }
+    if (ok >= 3) geo = 'tc';
+  }
+
+  /* ── 2. 四轮统计（只算有效圈的点）── */
   const sum = new Array(12).fill(0), peak = new Array(12).fill(-999);
-  let cnt = 0;
+  const gSum = new Array(12).fill(0);            // 几何（内外温差）用另一组通道单独累加
+  let cnt = 0, cntAll = 0;
   const byLap = new Map();
   for (const p of pts) {
-    if (!p.tt) continue;
-    cnt++;
-    for (let i = 0; i < 12; i++) { sum[i] += p.tt[i]; if (p.tt[i] > peak[i]) peak[i] = p.tt[i]; }
+    const T = p.tt;
+    if (!T) continue;
+    const G = p[geo];
+    const isFly = useValid ? valid.has(p.lap) : true;
+    cntAll++;
     let g = byLap.get(p.lap);
-    if (!g) { g = { lap: p.lap, t: new Array(12).fill(0), n: 0, absCnt: 0, brakeCnt: 0, maxSlip: 0 }; byLap.set(p.lap, g); }
-    g.n++;
-    for (let i = 0; i < 12; i++) g.t[i] += p.tt[i];
-    if (p.brk > 0.05) { g.brakeCnt++; if (p.abs > 0.5) g.absCnt++; }
-    if (p.ws && p.vel > 30) {
-      const car = p.vel / 3.6;
-      for (let w = 0; w < 4; w++) { const sl = (car - p.ws[w]) / car; if (sl > g.maxSlip) g.maxSlip = sl; }
+    if (!g) { g = { lap: p.lap, t: new Array(12).fill(0), n: 0, nAll: 0, tAll: new Array(12).fill(0), absCnt: 0, brakeCnt: 0, maxSlip: 0, slipSum: 0 }; byLap.set(p.lap, g); }
+    g.nAll++; for (let i = 0; i < 12; i++) g.tAll[i] += T[i];   // 逐圈趋势要包含非飞行圈，不然曲线中间会断
+    if (isFly) {
+      cnt++;
+      for (let i = 0; i < 12; i++) { sum[i] += T[i]; if (T[i] > peak[i]) peak[i] = T[i]; }
+      if (G) for (let i = 0; i < 12; i++) gSum[i] += G[i];
+      g.n++;
+      for (let i = 0; i < 12; i++) g.t[i] += T[i];
+    }
+    // ABS / 滑移：刹车事件本身不受"是否有效圈"影响，全程都算
+    if (p.brk > 0.05) {
+      g.brakeCnt++;
+      if (p.absAct) g.absCnt++;
+      if (p.ws && p.vel > 30) {
+        const car = p.vel / 3.6, sl = Math.max(...p.ws.slice(0, 4).map(x => (car - x) / car));
+        if (sl > g.maxSlip) g.maxSlip = sl;
+        g.slipSum += sl;
+      }
     }
   }
   if (!cnt) { s.__tire = null; return null; }
   const wheels = WHEELS.map(w => ({
     key: w.key, name: w.name,
-    avg: Math.round(sum[w.mid] / cnt * 10) / 10,
-    peak: Math.round(peak[w.mid] * 10) / 10,
-    outer: Math.round(sum[w.outer] / cnt * 10) / 10,
-    inner: Math.round(sum[w.inner] / cnt * 10) / 10,
-    delta: Math.round((sum[w.outer] - sum[w.inner]) / cnt * 10) / 10
+    avg: R1(sum[w.mid] / cnt),
+    peak: R1(peak[w.mid]),
+    outer: R1(gSum[w.outer] / cnt),
+    inner: R1(gSum[w.inner] / cnt),
+    delta: R1((gSum[w.outer] - gSum[w.inner]) / cnt)
   }));
-  let brakeCnt = 0, absCnt = 0, absCutSum = 0, deepCnt = 0, maxSlip = 0;
+
+  /* ── 3. ABS / 滑移 ──
+     实测：BrakeABScutPct 恒为 1.0（常量通道），BrakeABSactive 才是真信号。
+     所以主指标用 active 占比，cut 只在它真的有波动时才作为"深度"补充。 */
+  let brakeCnt = 0, absCnt = 0, cutSum = 0, cutN = 0, deepCnt = 0;
+  let slipSum = 0, slipN = 0, maxSlip = 0, lockN = 0, lockRun = 0;
   const absAt = [];
-  /* ⚠ GT3 重刹时 ABS 几乎总会轻微介入，「有没有触发」没有区分度。
-     所以分开统计：light = 任何介入（>0.5%），deep = 深度介入（削减 >5%，说明刹车过深）。 */
   for (const p of pts) {
     if (p.brk > 0.05) {
       brakeCnt++;
-      if (p.abs > 0.5) { absCnt++; absCutSum += p.abs; }
-      if (p.abs > 5) { deepCnt++; absAt.push({ pct: (p.lapPct || 0) * 100, cut: p.abs }); }
-    }
-    if (p.ws && p.vel > 30) {
-      const car = p.vel / 3.6;
-      for (let w = 0; w < 4; w++) { const sl = (car - p.ws[w]) / car; if (sl > maxSlip) maxSlip = sl; }
-    }
+      if (p.absAct) { absCnt++; absAt.push((p.lapPct || 0) * 100); }
+      if (p.absCut != null && isFinite(p.absCut)) { cutSum += p.absCut; cutN++; if (p.absCut > 5) { deepCnt++; } }
+      if (p.ws && p.vel > 30) {
+        const car = p.vel / 3.6, sl = Math.max(...p.ws.slice(0, 4).map(x => (car - x) / car));
+        slipSum += sl; slipN++;
+        if (sl > maxSlip) maxSlip = sl;
+        if (sl > 0.15) { lockRun++; if (lockRun >= 3) lockN++; } else lockRun = 0;   // 连续 3 帧(50ms)以上算一次锁死
+      }
+    } else lockRun = 0;
+    if (p.absCut != null && isFinite(p.absCut)) { if (mnAbs == null || p.absCut < mnAbs) mnAbs = p.absCut; if (mxAbs == null || p.absCut > mxAbs) mxAbs = p.absCut; }
   }
+  const cutLive = chanLive(mnAbs, mxAbs, 3);   // 削减比例通道是否真的在动
   const abs = {
-    brakePct: brakeCnt ? Math.round(absCnt / brakeCnt * 1000) / 10 : 0,     // 轻介入占比
-    deepPct: brakeCnt ? Math.round(deepCnt / brakeCnt * 1000) / 10 : 0,     // 深度介入占比（>5%）
-    avgCut: absCnt ? Math.round(absCutSum / absCnt * 10) / 10 : 0,
-    maxSlip: Math.round(maxSlip * 1000) / 10
+    brakePct: brakeCnt ? R1(absCnt / brakeCnt * 100) : 0,          // ABS 触发占刹车时间
+    deepPct: cutLive && brakeCnt ? R1(deepCnt / brakeCnt * 100) : 0, // 削减 >5% 的深度介入
+    avgCut: cutLive && cutN ? R1(cutSum / cutN) : 0,
+    cutLive,
+    avgSlip: slipN ? R1(slipSum / slipN * 100) : 0,
+    maxSlip: R1(maxSlip * 100),
+    lockCount: lockN
   };
   const buckets = {};
-  for (const e of absAt) { const b = Math.floor(e.pct / 5) * 5; buckets[b] = (buckets[b] || 0) + e.cut; }
+  for (const pct of absAt) { const b = Math.floor(pct / 5) * 5; buckets[b] = (buckets[b] || 0) + 1; }
   const cornerOf = pct => {
     let best = null, bd = 1e9;
     for (const c of (a.corners || [])) { const d = Math.abs(c.progress_pct - pct); if (d < bd) { bd = d; best = c; } }
     return bd <= 8 ? best : null;
   };
   abs.hotspots = Object.keys(buckets).map(k => +k).sort((x, y) => buckets[y] - buckets[x]).slice(0, 3)
-    .map(b => { const c = cornerOf(b + 2.5); return { pct: b, cornerId: c ? c.id : null, cut: Math.round(buckets[b]) }; });
+    .map(b => { const c = cornerOf(b + 2.5); return { pct: b, cornerId: c ? c.id : null, n: buckets[b], pctOfBrake: brakeCnt ? R1(buckets[b] / brakeCnt * 100) : 0 }; });
+
   const laps = [...byLap.values()].map(g => ({
     lap: g.lap,
-    temp: Math.round((g.t[1] + g.t[4] + g.t[7] + g.t[10]) / 4 / g.n * 10) / 10,
-    absPct: g.brakeCnt ? Math.round(g.absCnt / g.brakeCnt * 1000) / 10 : 0,
-    maxSlip: Math.round(g.maxSlip * 1000) / 10
+    temp: g.nAll ? R1((g.tAll[1] + g.tAll[4] + g.tAll[7] + g.tAll[10]) / 4 / g.nAll) : null,
+    absPct: g.brakeCnt ? R1(g.absCnt / g.brakeCnt * 100) : 0,
+    maxSlip: R1(g.maxSlip * 100),
+    fly: useValid ? valid.has(g.lap) : true
   })).sort((x, y) => x.lap - y.lap);
-  /* 磨损：iRacing 给的是剩余比例（0.97 = 剩 97%），差值是百分比的小数形式。
-     换算成「百分点 ×100」更直观，否则短 session 里全是 0。 */
-  const wear = { perLap: [], total: 0, outerInner: 0 };
+  /* 温度是否还在爬：把飞行圈按时间三等分，比较后段与前段。
+     还在爬 = 这节太短、胎没热透，此时不该拿绝对温度去判"设定有问题"。 */
+  const flySeq = laps.filter(l => l.fly && l.temp != null);
+  let climb = 0, plateauTemp = null, settled = false;
+  if (flySeq.length >= 3) {
+    const k = Math.floor(flySeq.length / 3), head = flySeq.slice(0, k), tail = flySeq.slice(-k);
+    const av = arr2 => arr2.reduce((t, l) => t + l.temp, 0) / arr2.length;
+    climb = R1(av(tail) - av(head));
+    settled = Math.abs(climb) < 1.5;
+    plateauTemp = R1(av(tail));
+  } else if (flySeq.length) {
+    plateauTemp = flySeq[flySeq.length - 1].temp;
+    settled = false;
+  }
+
+  /* ── 4. 磨损：先检测有没有真的在变，没变就不输出（练习/测试节 iRacing 不模拟磨损）── */
+  const wear = { perLap: [], total: 0, outerInner: 0, usable: false };
   if (s.tireByLap && s.tireByLap.length) {
+    let wLo = null, wHi = null;
     for (const r of s.tireByLap) {
       if (!r.wearStart || !r.wearEnd) continue;
-      const mid = [1, 4, 7, 10].map(i => (r.wearStart[i] - r.wearEnd[i]) * 100);
-      const outer = [0, 5, 6, 11].map(i => (r.wearStart[i] - r.wearEnd[i]) * 100);
-      const inner = [2, 3, 8, 9].map(i => (r.wearStart[i] - r.wearEnd[i]) * 100);
-      wear.perLap.push({
-        lap: r.lap,
-        mid: Math.round(mid.reduce((x, y) => x + y, 0) / 4 * 1000) / 1000,
-        outer: Math.round(outer.reduce((x, y) => x + y, 0) / 4 * 1000) / 1000,
-        inner: Math.round(inner.reduce((x, y) => x + y, 0) / 4 * 1000) / 1000
-      });
+      for (let i = 0; i < 12; i++) { const d = r.wearStart[i] - r.wearEnd[i]; if (wLo == null || d < wLo) wLo = d; if (wHi == null || d > wHi) wHi = d; }
     }
-    if (wear.perLap.length) {
-      wear.total = Math.round(wear.perLap.reduce((t, r) => t + r.mid, 0) * 100) / 100;
-      const o = wear.perLap.reduce((t, r) => t + r.outer, 0) / wear.perLap.length;
-      const inn = wear.perLap.reduce((t, r) => t + r.inner, 0) / wear.perLap.length;
-      wear.outerInner = Math.round((o - inn) * 100) / 100;
+    if (chanLive(wLo, wHi, 0.0002)) {           // 至少掉 0.02 个百分点才算有磨损
+      wear.usable = true;
+      for (const r of s.tireByLap) {
+        if (!r.wearStart || !r.wearEnd) continue;
+        const mid = [1, 4, 7, 10].map(i => (r.wearStart[i] - r.wearEnd[i]) * 100);
+        const outer = [0, 5, 6, 11].map(i => (r.wearStart[i] - r.wearEnd[i]) * 100);
+        const inner = [2, 3, 8, 9].map(i => (r.wearStart[i] - r.wearEnd[i]) * 100);
+        const R3 = v => Math.round(v * 1000) / 1000;
+        wear.perLap.push({ lap: r.lap, mid: R3(mid.reduce((x, y) => x + y, 0) / 4),
+          outer: R3(outer.reduce((x, y) => x + y, 0) / 4), inner: R3(inner.reduce((x, y) => x + y, 0) / 4) });
+      }
+      if (wear.perLap.length) {
+        wear.total = Math.round(wear.perLap.reduce((t, r) => t + r.mid, 0) * 100) / 100;
+        const o = wear.perLap.reduce((t, r) => t + r.outer, 0) / wear.perLap.length;
+        const inn = wear.perLap.reduce((t, r) => t + r.inner, 0) / wear.perLap.length;
+        wear.outerInner = Math.round((o - inn) * 100) / 100;
+      }
     }
   }
+
+  /* ── 5. 结论（按有效性裁剪，不输出没依据的判断）── */
   const v = [];
   const hot = wheels.reduce((m, w) => w.peak > m.peak ? w : m, wheels[0]);
   const coldW = wheels.reduce((m, w) => w.avg < m.avg ? w : m, wheels[0]);
   const skew = wheels.reduce((m, w) => Math.abs(w.delta) > Math.abs(m.delta) ? w : m, wheels[0]);
-  if (hot.peak > TIRE_HOT) v.push({ t: 'warn', txt: `<b>${hot.name}峰温 ${hot.peak}°C</b> 超过 ${TIRE_HOT}°C——长距离会掉速，这一侧负荷偏大（查胎压或外倾）。` });
-  else v.push({ t: 'good', txt: `四轮峰温最高 ${hot.peak}°C（${hot.name}），都在 ${TIRE_HOT}°C 以内，没有明显过热。` });
-  if (coldW.avg < TIRE_WARM) v.push({ t: 'warn', txt: `${coldW.name}平均仅 <b>${coldW.avg}°C</b>，低于 ${TIRE_WARM}°C——没进工作窗口，抓地没用满。` });
+  const judge = plateauTemp != null ? plateauTemp : coldW.avg;
+
+  /* 过热 / 过冷：只在「温度已经稳定」时下判断。
+     还在爬坡说明这节太短，此时任何窗口结论都是噪音。 */
+  if (!settled && Math.abs(climb) > 3) {
+    v.push({
+      t: 'mid',
+      txt: `胎温整节都在爬（有效圈前段 → 后段 <b>${climb > 0 ? '+' : ''}${climb}°C</b>，现在 ${plateauTemp}°C）——` +
+        `这节是从冷胎起跑的短节，胎还没热透，<b>先别拿绝对温度调设定</b>。想看长距离胎温，跑一整节（10 圈以上）再导。`
+    });
+  } else if (judge > TIRE_HOT) {
+    v.push({ t: 'warn', txt: `<b>稳定胎温 ${judge}°C 超过 ${TIRE_HOT}°C</b>（最热 ${hot.name}，瞬间峰温 ${hot.peak}°C）——长距离会掉速，这一侧负荷偏大，查胎压或外倾。` });
+  } else if (judge < TIRE_WARM) {
+    v.push({ t: 'mid', txt: `稳定胎温 <b>${judge}°C</b>，低于 ${TIRE_WARM}°C——胎没进工作窗口，抓地没用满（气温低或圈数太少时常见，不影响走线判断）。` });
+  } else {
+    v.push({ t: 'good', txt: `稳定胎温 <b>${judge}°C</b>，落在 ${TIRE_WARM}–${TIRE_HOT}°C 工作窗口内（瞬间峰温最高 ${hot.peak}°C / ${hot.name}）。` });
+  }
+  if (hot.peak > TIRE_HOT + 25) v.push({ t: 'warn', txt: `${hot.name}瞬间峰温到过 <b>${hot.peak}°C</b>——短时间的过热尖峰，通常来自某几个重刹弯的负荷集中。` });
+
+  const hotAvg = wheels.reduce((m, w) => w.avg > m.avg ? w : m, wheels[0]);
+  const crossSpread = R1(hotAvg.avg - coldW.avg);
+  if (Math.abs(crossSpread) >= 8) v.push({ t: 'mid', txt: `四轮温差 <b>${Math.abs(crossSpread)}°C</b>（最热 ${hotAvg.name} ${hotAvg.avg}°C / 最冷 ${coldW.name} ${coldW.avg}°C）——左右负荷不均，通常是这条赛道偏某一边，可以尝试微调左右胎压或刹车比。` });
+  else v.push({ t: 'good', txt: `四轮温差只有 ${Math.abs(crossSpread)}°C，左右负荷挺均衡。` });
+
   if (Math.abs(skew.delta) >= 12) {
     v.push({
       t: skew.delta > 0 ? 'warn' : 'mid',
@@ -410,18 +541,36 @@ function tireAnalysis(s) {
         ? '典型的外倾不足或胎压偏低，外侧在硬扛，每圈都在丢抓地。' : '外倾偏大或胎压偏高，接地面偏内侧。'}`
     });
   } else v.push({ t: 'good', txt: `四轮内外温差都在 12°C 以内（最大 ${skew.name} ${skew.delta > 0 ? '+' : ''}${skew.delta}°C），设定基本合理。` });
-  if (abs.deepPct > 20) v.push({ t: 'warn', txt: `<b>ABS 深度介入占刹车时间 ${abs.deepPct}%</b>（削减超过 5%）——刹车过深，试着把峰值刹车收一点、力度前移，出弯反而更快。` });
-  else if (abs.deepPct > 8) v.push({ t: 'mid', txt: `ABS 深度介入占刹车时间 ${abs.deepPct}%（轻触 ${abs.brakePct}%，平均削减 ${abs.avgCut}%），大部分刹车只是轻触，属正常范围。` });
-  else v.push({ t: 'good', txt: `ABS 深度介入仅 ${abs.deepPct}%（轻触 ${abs.brakePct}%），刹车力度控制得不错。` });
-  if (abs.maxSlip > 12) v.push({ t: 'warn', txt: `检测到最大滑移 <b>${abs.maxSlip}%</b>（轮速明显慢于车速）——有锁死/打滑，这部分是白丢的速度。` });
-  if (wear.perLap.length && Math.abs(wear.total) >= 0.05) {
+
+  if (brakeCnt) {
+    if (abs.brakePct > 60) v.push({ t: 'warn', txt: `<b>ABS 在 ${abs.brakePct}% 的刹车时间里都在工作</b>——几乎每个刹车都在打滑边缘，试着把峰值刹车收 3~5%、把力度往前移，出弯反而更快。` });
+    else if (abs.brakePct > 30) v.push({ t: 'mid', txt: `ABS 触发占刹车时间 <b>${abs.brakePct}%</b>——GT3 重刹时触发属正常，但如果集中在某几个弯，说明那几个弯刹车给多了。` });
+    else v.push({ t: 'good', txt: `ABS 只占刹车时间 ${abs.brakePct}%，大部分刹车在轮胎抓地极限内，力度控制得不错。` });
+    if (abs.cutLive && abs.avgCut > 5) v.push({ t: 'warn', txt: `ABS 平均削减 <b>${abs.avgCut}%</b> 的刹车力——介入很深，这段刹车基本是 ABS 在替你控制。` });
+    if (abs.lockCount > 0) v.push({ t: 'warn', txt: `检测到 <b>${abs.lockCount} 次锁死</b>（轮速比车速慢 15% 以上、持续 50ms+）——真锁死会大幅拉长刹车距离，这是最容易捡回来的时间。` });
+    else if (abs.avgSlip > 8) v.push({ t: 'mid', txt: `刹车时平均滑移 <b>${abs.avgSlip}%</b>，偏高但没到锁死——轮胎一直在滑，刹车距离会变长。` });
+    else if (slipN) v.push({ t: 'good', txt: `刹车时平均滑移 ${abs.avgSlip}%，轮胎基本贴着地面滚，刹车效率正常。` });
+  }
+  if (wear.usable) {
     if (Math.abs(wear.outerInner) >= 1) v.push({ t: 'warn', txt: `<b>偏磨明显</b>：外侧比内侧多磨 ${Math.abs(wear.outerInner).toFixed(2)} 个百分点（${wear.outerInner > 0 ? '外侧' : '内侧'}），长距离会越来越难开。` });
     else v.push({ t: 'good', txt: `内外磨损差 ${Math.abs(wear.outerInner).toFixed(2)} 个百分点，磨得挺均匀。` });
-  } else if (wear.perLap.length) {
-    v.push({ t: 'mid', txt: `全程磨损只有 ${Math.abs(wear.total).toFixed(2)} 个百分点——这段太短，磨损数据参考意义不大（要看长距离衰减，建议跑一整节再分析）。` });
   }
-  s.__tire = { hasTire: true, wheels, abs, laps, wear, verdicts: v, TIRE_WARM, TIRE_HOT, samples: cnt };
+
+  s.__tire = {
+    hasTire: true, wheels, abs, laps, wear, verdicts: v,
+    src, srcLabel: win.label, geo, geoLabel: geo === 'tc' ? '表面温度' : '胎体温度',
+    TIRE_WARM, TIRE_HOT,
+    plateauTemp, climb, settled,
+    samples: cnt, samplesAll: cntAll, flyingOnly: useValid,
+    chan: { ttLive, tcLive, cutLive, wearLive: wear.usable }
+  };
   return s.__tire;
+}
+/* 旧版本（v28 之前）上传的 iRacing 会话，points 里没有 tt / absAct，
+   而原 .ibt 文件不会留在 IndexedDB 里 → 只能提示重传。VBO 本来就没这些通道，不算。 */
+function tireNeedsReupload(s) {
+  return !!(s && s.analysis && s.analysis.isIR && s.points && s.points.length &&
+    s.points[0] && s.points[0].tt === undefined);
 }
 
 /* ---------- 规则问答引擎（本地，不联网） ----------
@@ -466,21 +615,23 @@ const QA_RULES = [
       let txt = '';
       if (bc) txt += `刹车点最不稳的位置在赛道 <b>${bc.progress}%</b>，每圈波动 <b>±${bc.std}%</b>。`;
       if (tir) {
-        txt += `<br>ABS 深度介入占刹车时间 <b>${tir.abs.deepPct}%</b>（轻触 ${tir.abs.brakePct}%，平均削减 ${tir.abs.avgCut}%）`;
+        const ab = tir.abs;
+        txt += `<br>ABS 在 <b>${ab.brakePct}%</b> 的刹车时间里触发`;
         if (tir.abs.hotspots.length) {
           const h = tir.abs.hotspots[0];
-          txt += `，最深的一段在 <b>${h.pct}–${h.pct + 5}%</b>${h.cornerId != null ? '（T' + h.cornerId + ' 附近）' : ''}`;
+          txt += `，最频繁的一段在 <b>${h.pct}–${h.pct + 5}%</b>${h.cornerId != null ? '（T' + h.cornerId + ' 附近）' : ''}`;
         }
+        if (ab.lockCount > 0) txt += `。<br>检测到 <b>${ab.lockCount} 次锁死</b>（轮速掉到车速 85% 以下），刹车时平均滑移 ${ab.avgSlip}%`;
+        else if (ab.avgSlip) txt += `，刹车时平均滑移 <b>${ab.avgSlip}%</b>，最大 ${ab.maxSlip}%`;
         txt += '。';
-        if (tir.abs.maxSlip > 12) txt += `<br>还检测到最大滑移 <b>${tir.abs.maxSlip}%</b>，有锁死/打滑。`;
       } else if (txt) txt += '<br>（这份数据没有 ABS/轮速通道）';
-      const deep = tir && tir.abs.deepPct > 20;
+      const deep = tir && (tir.abs.brakePct > 60 || tir.abs.lockCount > 0);
       const tone = (bc && bc.std > 2) || deep ? 'warn' : 'good';
       return {
         tone, txt: txt || '刹车数据不足。',
         tip: (bc && bc.std > 2) ? '先把这个刹车点固定下来——每圈都在同一位置刹车，圈速立刻会稳。'
           : deep ? '试着把峰值刹车收 3~5%，留一点 ABS 之前的余量，出弯反而更快。' : '',
-        link: { href: 'laps.html', label: '看刹车点一致性' }
+        link: { href: 'telemetry.html', label: '看 ABS 与轮胎面板' }
       };
     }
   },
@@ -489,11 +640,16 @@ const QA_RULES = [
     title: '轮胎温度正常吗？',
     run(s) {
       const t = tireAnalysis(s);
-      if (!t) return { tone: 'mid', txt: '这份数据没有轮胎温度通道（卡丁车 VBO 没有胎温传感器，iRacing 的 .ibt 才有）。' };
+      if (!t) {
+        return tireNeedsReupload(s)
+          ? { tone: 'mid', txt: '这场是<b>旧版本上传的</b>，当时没保存轮胎通道。重新上传一次原 .ibt 文件就能看到胎温/ABS/磨损（会作为新会话追加，历史不受影响）。' }
+          : { tone: 'mid', txt: '这份数据没有轮胎温度通道（卡丁车 VBO 没有胎温传感器，iRacing 的 .ibt 才有）。' };
+      }
       return {
         tone: t.verdicts.some(v => v.t === 'warn') ? 'warn' : 'good',
-        txt: t.verdicts.filter(v => /°C|温差/.test(v.txt)).map(v => '· ' + v.txt).join('<br>') || '轮胎数据不足。',
-        link: { href: 'summary.html', label: '看轮胎面板' }
+        txt: t.verdicts.map(v => '· ' + v.txt.replace(/^/, '')).join('<br>') || '轮胎数据不足。',
+        tip: t.settled ? '' : '胎温还在爬坡，说明这节偏短——想看真实的长距离胎温，建议跑满一整节再导出。',
+        link: { href: 'telemetry.html', label: '看轮胎与刹车面板' }
       };
     }
   },
@@ -502,8 +658,18 @@ const QA_RULES = [
     title: '轮胎磨损怎么样？',
     run(s) {
       const t = tireAnalysis(s);
-      if (!t || !t.wear.perLap.length) return { tone: 'mid', txt: '这份数据没有磨损通道。' };
+      if (!t) return { tone: 'mid', txt: '这份数据没有轮胎通道，看不了磨损。' };
       const w = t.wear;
+      /* 实测：练习/测试节的 .ibt 里 LFwear* 全程只有一个取值（iRacing 不模拟磨损），
+         这种情况要明说，不能报"磨得挺均匀"误导。 */
+      if (!w.usable) {
+        return {
+          tone: 'mid',
+          txt: '这场<b>没有磨损数据</b>——iRacing 在练习/测试节不会模拟轮胎损耗，磨损通道全程是一个固定值。' +
+            '<br>想看长距离衰减，得跑一场<b>有轮胎损耗的比赛</b>（或长时间练习）再导出遥测。',
+          link: { href: 'telemetry.html', label: '看轮胎面板' }
+        };
+      }
       const per = w.perLap.reduce((t, r) => t + r.mid, 0) / w.perLap.length;
       const short = Math.abs(w.total) < 0.05;
       return {
@@ -511,7 +677,7 @@ const QA_RULES = [
         txt: `平均每圈掉 <b>${per.toFixed(2)}</b> 个百分点胎面（四轮中层），全程累计 <b>${w.total.toFixed(2)}</b>。<br>` +
           (short ? '这段太短，磨损基本看不出来——想看长距离衰减，得跑一整节再分析。'
             : `内外磨损差 <b>${Math.abs(w.outerInner).toFixed(2)}</b> 个百分点（${w.outerInner > 0 ? '外侧多' : '内侧多'}）——${Math.abs(w.outerInner) >= 1 ? '偏磨会让长距离越来越难开，建议看外倾/胎压。' : '磨得挺均匀。'}`),
-        link: { href: 'summary.html', label: '看磨损趋势' }
+        link: { href: 'telemetry.html', label: '看磨损趋势' }
       };
     }
   },

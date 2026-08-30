@@ -216,9 +216,14 @@ function ibtTicksToPoints(ticks) {
       lap: +tk.lap || 0,
       lapPct: +tk.lapPct || 0,            // 0-1
       // 轮胎/刹车（仅 iRacing，VBO 这些字段为 null）
-      tt: tk.tt ? tk.tt.map(v => Math.round(v * 10) / 10) : null,   // 4 轮 × (L,M,R) 胎面温度 °C
+      tt: tk.tt ? tk.tt.map(v => Math.round(v * 10) / 10) : null,   // 4 轮 × (L,M,R) 胎体温度 °C
+      tc: tk.tc ? tk.tc.map(v => Math.round(v * 10) / 10) : null,   // 4 轮 × (L,M,R) 表面温度 °C
       ws: tk.ws ? tk.ws.map(v => Math.round(v * 10) / 10) : null,   // 4 轮转速 m/s
-      abs: tk.absCut != null ? Math.round(tk.absCut * 10) / 10 : (tk.absAct != null ? +tk.absAct : null) // ABS 削减% / 激活
+      /* absCut / absAct 分开存，不在这一步合并：
+         实测 296 GT3 里 BrakeABScutPct 恒为 1.0（连不刹车时都是），是无效通道；
+         BrakeABSactive 才是真信号。合并成一个字段会让上层无法判断该信谁。 */
+      absCut: tk.absCut != null ? Math.round(tk.absCut * 10) / 10 : null,   // ABS 削减比例 %
+      absAct: tk.absAct != null ? (tk.absAct ? 1 : 0) : null                // ABS 是否激活 0/1
     });
     prevLat = lat; prevLon = lon; prevHdg = hdg != null ? hdg : prevHdg;
   }
