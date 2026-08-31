@@ -694,7 +694,7 @@ const QA_RULES = [
     }
   },
   {
-    id: 'corner', kw: ['弯', '弯道', '出弯', '入弯', '弯心', '转向不足', '推头'],
+    id: 'corner', kw: ['弯', '弯道', '入弯', '弯心', '转向不足', '推头', '损失', '丢速'],
     title: '哪个弯丢速最多？',
     run(s) {
       const cs = [...s.analysis.corners].sort((x, y) => y.speed_loss - x.speed_loss).slice(0, 3);
@@ -707,7 +707,7 @@ const QA_RULES = [
     }
   },
   {
-    id: 'throttle', kw: ['油门', '给油', '全油门', '加速', '太晚'],
+    id: 'throttle', kw: ['油门', '给油', '全油门', '加速', '太晚', '早油', '给油早', '出弯给油', '早给油'],
     title: '出弯给油够早吗？',
     run(s) {
       const a = s.analysis;
