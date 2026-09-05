@@ -925,7 +925,8 @@ const PAGES = [
   { file: 'telemetry.html', name: '遥测通道', icon: '📈' },
   { file: 'compare.html', name: '多圈对比', icon: '🔀' },
   { file: 'ideal.html', name: '极限圈速', icon: '⚡' },
-  { file: 'track.html', name: '赛道图', icon: '🛰' }
+  { file: 'track.html', name: '赛道图', icon: '🛰' },
+  { file: 'help.html', name: '帮助', icon: '📖' }
 ];
 function renderNav(activeFile) {
   const el = document.getElementById('pagenav');

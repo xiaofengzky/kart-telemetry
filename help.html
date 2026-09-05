@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>帮助 · Kart Telemetry</title>
+<link rel="stylesheet" href="style.css?v=33">
+<style>
+  .h-hero { background: linear-gradient(160deg, #1a1013 0%, #161b23 60%, #10141b 100%); border: 1px solid var(--line); border-radius: 10px; padding: 22px 20px; margin-bottom: 14px; }
+  .h-hero .t { font-size: 22px; font-weight: 900; letter-spacing: 1px; }
+  .h-hero .t .acc { color: var(--accent); }
+  .h-hero .s { margin-top: 8px; font-weight: 600; }
+  .h-hero .b { color: var(--mut); font-size: 12px; margin-top: 6px; }
+  .h-card { margin-bottom: 14px; }
+  .h-tx { font-size: 13px; line-height: 1.75; margin: 0 0 8px; }
+  .h-tx b, .h-itx b { color: #fff; }
+  .h-mut { color: var(--mut); }
+  .h-item { display: flex; margin: 0 0 9px; }
+  .h-dot { width: 18px; flex: none; font-weight: 900; }
+  .h-g { color: var(--green); } .h-b { color: var(--blue); } .h-o { color: var(--amber); }
+  .h-itx { flex: 1; font-size: 13px; line-height: 1.7; margin: 0; }
+  .h-pg { display: flex; padding: 11px 0; border-bottom: 1px solid var(--line); }
+  .h-pg:last-child { border-bottom: none; }
+  .h-ic { width: 40px; flex: none; font-size: 24px; text-align: center; margin-right: 12px; }
+  .h-pg b { display: block; margin-bottom: 3px; }
+  .h-pg span { color: var(--mut); font-size: 12.5px; line-height: 1.65; }
+  .h-stp { display: flex; margin-bottom: 11px; }
+  .h-n { width: 24px; height: 24px; flex: none; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 800; font-size: 13px; display: flex; align-items: center; justify-content: center; margin: 2px 12px 0 0; }
+  .h-q { color: var(--amber); font-weight: 700; margin: 0 0 3px; }
+  .h-a { color: var(--mut); font-size: 12.5px; line-height: 1.65; margin: 0 0 12px; }
+  .h-foot { text-align: center; color: var(--mut); font-size: 11px; opacity: .8; margin: 10px 0 20px; }
+</style>
+</head>
+<body class="mpage">
+<header class="topbar">
+  <div class="brand"><span class="dot"></span> KART<span class="accent">TELEMETRY</span></div>
+  <nav id="pagenav" class="pagenav"></nav>
+  <div class="grow"></div>
+</header>
+
+<div class="pagewrap">
+  <div class="h-hero">
+    <div class="t">KART<span class="acc">TELEMETRY</span></div>
+    <div class="s">卡丁车遥测 · 圈速分析 · 提升练习</div>
+    <div class="b">微信小程序 &amp; 网页版 双端使用说明</div>
+  </div>
+
+  <div class="card h-card">
+    <h3>📖 这是什么</h3>
+    <p class="h-tx">把你的卡丁车 VBOX 记录仪(<b>.vbo</b>)或 iRacing 模拟赛车遥测(<b>.ibt</b>)导入后,自动<b>分圈、算圈速、诊断每一圈</b>,并指出每段还能快多少、该向哪一圈学习。</p>
+    <p class="h-tx h-mut">网页版与微信小程序功能一致,数据互不共享、各自保存在本地浏览器/手机中。</p>
+  </div>
+
+  <div class="card h-card">
+    <h3>🔒 数据与隐私</h3>
+    <div class="h-item"><span class="h-dot h-g">•</span><p class="h-itx">数据只存在本地:网页版存浏览器数据库,小程序存手机文件,<b>不会上传任何服务器</b>。</p></div>
+    <div class="h-item"><span class="h-dot h-b">•</span><p class="h-itx">只有你主动点「🏁 上榜」时,才会上传该场数据的<b>圈速摘要</b>(圈时/分段/极速),不含 GPS 轨迹。</p></div>
+    <div class="h-item"><span class="h-dot h-o">•</span><p class="h-itx">上榜昵称是系统生成的匿名「车手#xxxx」,榜单页可随时<b>删除自己的成绩</b>。</p></div>
+  </div>
+
+  <div class="card h-card">
+    <h3>🧭 各界面功能</h3>
+    <div class="h-pg"><div class="h-ic">🏠</div><div><b>车库 · 首页</b><span>导入 .vbo / .ibt;所有场次按赛道自动分组;每场可进 圈速/遥测/对比/极限圈速/赛道图,可改名、删除、上榜。</span></div></div>
+    <div class="h-pg"><div class="h-ic">🎯</div><div><b>总结</b><span>一场“教练报告”:圈速稳定性、S1-S3 分段表现、TOP3 提升点、可捡时间在哪一段、训练清单。</span></div></div>
+    <div class="h-pg"><div class="h-ic">⏱</div><div><b>圈速</b><span>逐圈时间与一致性,标出波动区和刹车点漂移的圈;可排除可疑圈后重新分析。</span></div></div>
+    <div class="h-pg"><div class="h-ic">📈</div><div><b>遥测通道</b><span>速度/油门/刹车/转向/档位/转速/横向G/纵向G 逐通道曲线,可多圈叠加;iRacing 另有轮胎/ABS 面板。</span></div></div>
+    <div class="h-pg"><div class="h-ic">🔀</div><div><b>多圈对比</b><span>任意两圈(可跨场次)全程逐点比较,累积时间 Delta 看清在哪赢/输;支持“理论最快圈”对照。</span></div></div>
+    <div class="h-pg"><div class="h-ic">⚡</div><div><b>极限圈速</b><span>赛道切多段、每段取所有圈里最快的一次,拼出“理论最快圈”;指出每段还能捡多少、该学哪一圈。</span></div></div>
+    <div class="h-pg"><div class="h-ic">🛰</div><div><b>赛道图</b><span>真实卫星地图叠加速度着色走线、多圈走线、弯角标注(瓦片需联网加载);无名赛道按轨迹形状自动归类为 场地 A/B/…。</span></div></div>
+    <div class="h-pg"><div class="h-ic">🏆</div><div><b>赛道榜</b><span>云端同赛道排行榜(小程序端,网页版暂未接入):真车与 iRacing 分榜;最快单圈 Top50 + 你的名次。先在车库点「🏁 上榜」上传摘要。</span></div></div>
+  </div>
+
+  <div class="card h-card">
+    <h3>🚀 快速上手</h3>
+    <div class="h-stp"><div class="h-n">1</div><p class="h-itx"><b>导入</b>:把 .vbo / .ibt 文件发到微信任意聊天(如「文件传输助手」)→ 小程序车库点「+ 导入文件」;网页版直接拖进页面或点右上角「+ 上传」。</p></div>
+    <div class="h-stp"><div class="h-n">2</div><p class="h-itx"><b>看数据</b>:点一场数据 →「圈速」看每圈表现,「总结」看教练诊断,「极限圈速」看理论上限。</p></div>
+    <div class="h-stp"><div class="h-n">3</div><p class="h-itx"><b>上榜(可选)</b>:车库点「🏁 上榜」→ 顶部「🏆 赛道榜」看同赛道排名。</p></div>
+    <div class="h-stp"><div class="h-n">4</div><p class="h-itx"><b>隐私撤销</b>:榜单页底部「删除我的成绩」。</p></div>
+  </div>
+
+  <div class="card h-card">
+    <h3>❓ 常见问题</h3>
+    <p class="h-q">赛道榜报“云函数未部署”?</p>
+    <p class="h-a">用微信开发者工具打开工程,cloudfunctions/ 下的 submitLaps / getBoard / deleteMyLaps 需逐个右键「上传并部署:云端安装依赖」。</p>
+    <p class="h-q">同一赛道跑了几次,却分成两组/两条榜?</p>
+    <p class="h-a">受 GPS 信号与车道偏移影响,轨迹指纹偶有漂移,属已知边界;同一场地多跑几次会自动归拢。</p>
+    <p class="h-q">“理论最快圈”比我的最好圈快很多,正常吗?</p>
+    <p class="h-a">正常。它是把整场每段最优拼起来的理想上限,通常快于任何一条真实单圈,别怀疑数据坏了。</p>
+    <p class="h-q">网页版看不到新功能?</p>
+    <p class="h-a">静态站有缓存,请强制刷新(Ctrl/Cmd + Shift + R),或稍后再访问。</p>
+  </div>
+
+  <div class="h-foot">Kart Telemetry · 数据只属于你自己</div>
+</div>
+
+<script src="core.js?v=33"></script>
+<script src="help.js?v=33"></script>
+</body>
+</html>
