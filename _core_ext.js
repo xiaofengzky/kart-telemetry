@@ -1282,3 +1282,194 @@ function deltaTxt(v, digits) {
   const d = digits == null ? 3 : digits;
   return (v > 0 ? '+' : '') + v.toFixed(d) + 's';
 }
+
+/* ======================================================================
+   赛道指纹(Fourier 形状描述子) —— VBO 文件没有赛道名,靠轨迹几何形状
+   自动判断"哪些场次是同一赛道":车库页按场地自动分组、未来排行榜判重。
+   ----------------------------------------------------------------------
+   做法:取一条首尾闭合最好的有效圈 → 经纬度投影为局部米坐标(平均纬度
+   cos 修正) → 按弧长等分重采样 FP_N 点(速度不影响形状) → 每点到质心
+   的距离序列 r[i] → 减均值(去 DC)+ RMS 归一(尺度无关) → FFT →
+   取前 FP_K 个非 DC 幅度并 L2 归一 = 指纹。同赛道距离近,不同赛道远。
+   幅度谱不变量:起点位置(圆环移位→仅相位变)、行驶方向(倒序→共轭)、
+   旋转(半径序列与朝向无关)、平移/缩放(质心+RMS 归一)。
+   ====================================================================== */
+const FP_N = 64, FP_K = 16, FP_LEN_TOL = .13, FP_DIST_THR = .32;
+const _fpCache = new WeakMap();          // session 对象 → {len,fp} | false(无 GPS)
+const FP_R = 6371000, FP_RAD = Math.PI / 180;
+
+/* [{lat,lon}] → 局部平面米坐标 [{x,y}],以质心为原点 */
+function fpProject(pts) {
+  let lat0 = 0, lon0 = 0;
+  for (const p of pts) { lat0 += p.lat; lon0 += p.lon; }
+  lat0 /= pts.length; lon0 /= pts.length;
+  const cos = Math.cos(lat0 * FP_RAD);
+  const out = new Array(pts.length);
+  for (let i = 0; i < pts.length; i++) {
+    out[i] = { x: (pts[i].lon - lon0) * FP_RAD * FP_R * cos, y: (pts[i].lat - lat0) * FP_RAD * FP_R };
+  }
+  return out;
+}
+/* 按累计弧长等分重采样为 N 点 */
+function fpResample(m, N) {
+  const n = m.length;
+  if (n < 8) return null;
+  const seg = new Float64Array(n - 1);
+  let L = 0;
+  for (let i = 0; i < n - 1; i++) { const dx = m[i + 1].x - m[i].x, dy = m[i + 1].y - m[i].y; seg[i] = Math.hypot(dx, dy); L += seg[i]; }
+  if (!(L > 20)) return null;
+  const out = new Array(N);
+  let i = 0, acc = 0;
+  for (let k = 0; k < N; k++) {
+    const t = L * k / N;
+    while (i < n - 2 && acc + seg[i] < t) { acc += seg[i]; i++; }
+    const f = seg[i] > 0 ? (t - acc) / seg[i] : 0;
+    out[k] = { x: m[i].x + (m[i + 1].x - m[i].x) * f, y: m[i].y + (m[i + 1].y - m[i].y) * f };
+  }
+  return { pts: out, len: L };
+}
+/* 原地迭代 radix-2 FFT(长度须为 2 的幂) */
+function fpFft(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let s = 0; s < n; s += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < (len >> 1); k++) {
+        const a = s + k, b = a + (len >> 1);
+        const ur = re[a], ui = im[a];
+        const vr = re[b] * cr - im[b] * ci, vi = re[b] * ci + im[b] * cr;
+        re[a] = ur + vr; im[a] = ui + vi; re[b] = ur - vr; im[b] = ui - vi;
+        const ncr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = ncr;
+      }
+    }
+  }
+}
+/* 米坐标序列 → {len,fp};形状经 FFT 幅度谱压缩为 FP_K 维单位向量 */
+function fpFromMeters(m) {
+  const rs = fpResample(m, FP_N);
+  if (!rs) return null;
+  let cx = 0, cy = 0;
+  for (const p of rs.pts) { cx += p.x; cy += p.y; }
+  cx /= FP_N; cy /= FP_N;
+  const re = new Float64Array(FP_N), im = new Float64Array(FP_N);
+  let rms = 0;
+  for (let i = 0; i < FP_N; i++) {
+    const r = Math.hypot(rs.pts[i].x - cx, rs.pts[i].y - cy);
+    re[i] = r; rms += r * r;
+  }
+  rms = Math.sqrt(rms / FP_N) || 1;
+  let mu = 0; for (let i = 0; i < FP_N; i++) mu += re[i];
+  mu /= FP_N;
+  for (let i = 0; i < FP_N; i++) re[i] = (re[i] - mu) / rms;
+  fpFft(re, im);
+  const fp = [];
+  for (let k = 1; k <= FP_K; k++) fp.push(Math.hypot(re[k], im[k]));
+  let n2 = 0; for (const v of fp) n2 += v * v;
+  n2 = Math.sqrt(n2) || 1;
+  for (let i = 0; i < fp.length; i++) fp[i] /= n2;
+  /* 圈长用锚点弦长求和:等效低通后的周长,对逐点 GPS 噪声不敏感
+     (原始折线逐段累加会被亚米级抖动放大数倍) */
+  let len = 0;
+  for (let i = 1; i < FP_N; i++) len += Math.hypot(rs.pts[i].x - rs.pts[i - 1].x, rs.pts[i].y - rs.pts[i - 1].y);
+  return { len, fp };
+}
+/* [{lat,lon}] → {len,fp} | null(点太少或缺 GPS 时) */
+function fingerprintOf(points) {
+  if (!points || points.length < 8) return null;
+  for (const p of points) if (!isFinite(p.lat) || !isFinite(p.lon)) return null;
+  return fpFromMeters(fpProject(points));
+}
+function fpDist(a, b) {
+  let s = 0;
+  for (let i = 0; i < FP_K; i++) { const d = a.fp[i] - b.fp[i]; s += d * d; }
+  return Math.sqrt(s);
+}
+/* 同一赛道判定:圈长差 < 容差 且 指纹距离 <= 阈值 */
+function fpSame(a, b) {
+  if (!a || !b || !a.fp || !b.fp) return false;
+  const lr = a.len / b.len;
+  if (lr < 1 - FP_LEN_TOL || lr > 1 + FP_LEN_TOL) return false;
+  return fpDist(a, b) <= FP_DIST_THR;
+}
+/* 首尾距离 / 圈长 —— 越小说明这圈是闭合的一整圈 */
+function fpGapRatio(s, l) {
+  const a = s.points[l.startIdx], b = s.points[l.endIdx];
+  if (!a || !b) return 1;
+  const lat0 = (a.lat + b.lat) / 2 * FP_RAD, cos = Math.cos(lat0);
+  const dx = (b.lon - a.lon) * FP_RAD * FP_R * cos, dy = (b.lat - a.lat) * FP_RAD * FP_R;
+  return Math.hypot(dx, dy) / Math.max(1, l.distance_m || 1);
+}
+/* 会话指纹:自动挑首尾闭合最好的有效圈,结果按 session 对象缓存 */
+function sessionFp(s) {
+  if (!s || !s.analysis || !s.points) return null;
+  if (_fpCache.has(s)) { const v = _fpCache.get(s); return v || null; }
+  const full = s.analysis.full || [];
+  const pool = full.filter(l => !l.junk && !l.abnormal);
+  const laps = pool.length ? pool : full.filter(l => !l.junk);
+  let best = null, bg = Infinity;
+  for (const l of laps) {
+    const g = fpGapRatio(s, l);
+    if (g < bg) { bg = g; best = l; }
+  }
+  let v = null;
+  if (best) {
+    const pts = [];
+    for (let t = best.startIdx; t <= best.endIdx; t++) pts.push(s.points[t]);
+    v = fingerprintOf(pts);
+  }
+  _fpCache.set(s, v || false);
+  return v;
+}
+/* 场地标签:1→A, 2→B … 26→Z, 27+ → #27 */
+function fpVenueLabel(n) {
+  return n <= 26 ? String.fromCharCode(64 + n) : '#' + n;
+}
+/* 把会话列表描述成赛道分组:
+   已带赛道名(iRacing / VBO 注释)的按名分组;
+   无名的用指纹聚簇 → 场地 A / B / …(A 是最早出现的场地)。
+   返回 [{ key, label, sessions }] —— key 稳定(供折叠状态记忆)。 */
+function describeTracks(sessions) {
+  const named = new Map(), un = [];
+  for (const s of sessions) {
+    const t = sessionTrack(s);
+    if (t) {
+      if (!named.has(t)) named.set(t, []);
+      named.get(t).push(s);
+    } else un.push(s);
+  }
+  const groups = [];
+  for (const [t, list] of named) {
+    groups.push({ key: 'n:' + t, label: trackZh(t), sessions: list });
+  }
+  /* 未命名按最早出现排序,再逐条聚簇(先到先成为簇的参照) */
+  un.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')) || String(a.id).localeCompare(String(b.id)));
+  const clusters = [];            // {ref:{len,fp}|null, sessions:[...]}
+  outer: for (const s of un) {
+    const f = sessionFp(s);
+    if (f) {
+      for (const c of clusters) {
+        if (c.ref && fpSame(f, c.ref)) { c.sessions.push(s); continue outer; }
+      }
+    }
+    clusters.push({ ref: f, sessions: [s] });
+  }
+  let vn = 0;
+  for (const c of clusters) {
+    if (c.ref) {
+      vn++;
+      const key = 'fp:' + c.ref.fp.slice(0, 6).map(x => Math.round(x * 1e4)).join('_');
+      groups.push({ key, label: '场地 ' + fpVenueLabel(vn), sessions: c.sessions });
+    } else {
+      /* 无 GPS 数据,退化为一个大"未分类"组(同旧行为) */
+      groups.push({ key: 'u', label: '未分类赛道', sessions: c.sessions });
+    }
+  }
+  return groups;
+}

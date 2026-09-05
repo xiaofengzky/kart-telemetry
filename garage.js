@@ -1,5 +1,6 @@
-/* 车库页：按赛道分组展示会话（iRacing 自动按赛道分；VBOX 归「未分类赛道」）
-   点赛道大类展开 → 显示这一赛道每一场什么时候跑的 → 点卡片进分析 */
+/* 车库页：按赛道分组展示会话（iRacing 自动按赛道分；VBOX 无名会话按轨迹形状
+   自动归「场地 A/B/…」，同一场地不同日期会归在一起）。点赛道大类展开 →
+   显示这一赛道每一场什么时候跑的 → 点卡片进分析 */
 (function () {
   /* 会话列表渲染（赛道分组视图） */
   function render() {
@@ -14,29 +15,25 @@
     }
     if (dz) dz.style.display = 'none';
 
-    // 按赛道分组（保持稳定顺序：有会话的赛道按最近活动排序）
-    const groups = new Map();
-    for (const s of SESSIONS) {
-      const t = sessionTrack(s) || '未分类赛道';
-      if (!groups.has(t)) groups.set(t, []);
-      groups.get(t).push(s);
-    }
-    const order = [...groups.entries()].sort((a, b) => {
-      const la = a[1].map(x => x.date || '').sort().pop() || '';
-      const lb = b[1].map(x => x.date || '').sort().pop() || '';
+    // 已带名的按赛道名分组；无名的按轨迹指纹聚簇成 场地 A/B/…
+    const desc = describeTracks(SESSIONS).sort((a, b) => {
+      const la = a.sessions.map(x => x.date || '').sort().pop() || '';
+      const lb = b.sessions.map(x => x.date || '').sort().pop() || '';
       return String(lb).localeCompare(String(la));
     });
-    const activeTrack = curId ? sessionTrack(SESSIONS.find(x => x.id === curId)) : null;
+    const hasFp = desc.some(g => g.key.indexOf('fp:') === 0);
 
-    cnt.textContent = SESSIONS.length + ' 场 · ' + groups.size + ' 条赛道';
-    list.innerHTML = order.map(([track, sessions]) => {
-      const zh = trackZh(track);
-      const best = sessions.map(s => s.analysis.best_time).filter(t => t != null);
-      const bestT = best.length ? fmtTime(Math.min(...best), 2) : '—';
-      const recent = (sessions.map(x => x.date || '').sort().pop() || '').replace(/^iRacing /, '');
-      const open = track === activeTrack || sessions.length <= 3;
-      const items = sessions.map(s => gitem(s)).join('');
-      return `<div class="trkgroup ${open ? 'open' : ''}">
+    cnt.textContent = SESSIONS.length + ' 场 · ' + desc.length + ' 条赛道';
+    list.innerHTML = (hasFp ? `<div class="chint">✨ 无名场次已按轨迹形状自动分成 场地 A/B/…（同一场地不同日期会自动归在一起）。点每场的 ✏️ 填上真实赛道名后，就会并入对应命名分组。</div>` : '')
+      + desc.map(g => {
+        const zh = g.label;
+        const sessions = g.sessions;
+        const best = sessions.map(s => s.analysis.best_time).filter(t => t != null);
+        const bestT = best.length ? fmtTime(Math.min(...best), 2) : '—';
+        const recent = (sessions.map(x => x.date || '').sort().pop() || '').replace(/^iRacing /, '');
+        const open = sessions.some(s => s.id === curId) || sessions.length <= 3;
+        const items = sessions.map(s => gitem(s, zh, g.key.indexOf('fp:') === 0)).join('');
+        return `<div class="trkgroup ${open ? 'open' : ''}">
         <button class="trkhead" type="button">
           <span class="trkflag">🏁</span>
           <span class="trkname">${esc(zh)}</span>
@@ -45,7 +42,7 @@
         </button>
         <div class="trkbody">${items}</div>
       </div>`;
-    }).join('');
+      }).join('');
 
     list.querySelectorAll('.trkhead').forEach(h => {
       h.onclick = () => h.closest('.trkgroup').classList.toggle('open');
@@ -53,17 +50,18 @@
     bindActions();
   }
 
-  /* 单个会话卡片 */
-  function gitem(s) {
+  /* 单个会话卡片。zhOverride:该会话所在分组的显示名;fp:是否指纹自动分组 */
+  function gitem(s, zhOverride, fp) {
     const a = s.analysis;
     const ir = s.source === 'iracing';
     const track = sessionTrack(s);
-    const zh = trackZh(track || '未分类赛道');
     const unnamed = !track;
+    const zh = zhOverride != null ? zhOverride : trackZh(track || '未分类赛道');
+    const tip = unnamed ? (fp ? '按轨迹形状自动归组的场地。点 ✏️ 填上真实赛道名后会并入命名分组' : '未分类赛道，点 ✏️ 改名') : '';
     return `<div class="gitem ${s.id === curId ? 'on' : ''}" data-id="${s.id}">
       <div class="gmain">
         <div class="gtop">
-          <span class="gname ${unnamed ? 'gname-unnamed' : ''}" title="${unnamed ? '未分类赛道，点 ✏️ 改名' : ''}">${esc(zh)} <span class="gdate2">${esc(String(s.date).replace(/^iRacing /, ''))}</span></span>
+          <span class="gname ${unnamed ? 'gname-unnamed' : ''}" title="${tip}">${esc(zh)} <span class="gdate2">${esc(String(s.date).replace(/^iRacing /, ''))}</span></span>
           <i class="src ${ir ? 'iracing' : 'vbo'}">${ir ? 'iRacing' : 'VBOX'}</i>
           <button class="gedit" data-rename="${s.id}" title="修改赛道名（用于卡丁车 VBOX 改名：英文或中文都行，留空=未分类）">✏️ 改名</button>
         </div>
