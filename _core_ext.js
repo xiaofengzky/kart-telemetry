@@ -248,20 +248,22 @@ function trackSketch(cv, s, opts = {}) {
   return { X, Y, pts, N, pickClosest };
 }
 
-/* ---------- 多圈对比：累积时间 Delta ----------
+/* ---------- 累积时间 Delta 的公共计算 ----------
+   ref = 基准曲线，cmp = 被比较曲线（两者都必须按「距离等分」采样，
+   否则进度 % 对不上，delta 会失真）。
    Delta 直接用数据里的时间戳算（不用速度积分），
    这样 delta 末值必然等于两圈真实圈速差，不会有累积漂移。
-   delta[k] = B 的圈内时间 − A 的圈内时间
-     → 曲线往上走 = B 在这段丢时间；往下走 = B 在这段捡时间 */
-function compareLaps(sA, lapA, sB, lapB, N = 1000) {
-  const A = lapTrace(sA, lapA, 'speed', N);
-  const B = lapTrace(sB, lapB, 'speed', N);
+   delta[k] = cmp 的圈内时间 − ref 的圈内时间
+     → 曲线往上走 = cmp 在这段丢时间；往下走 = cmp 在这段捡时间
+   lost / gained 针对的是 cmp。
+   多圈对比与标杆圈对比共用这一份实现，两边语义完全一致。 */
+function deltaSeries(ref, cmp, N, meta) {
   const delta = [], dist = [], spdDiff = [], pct = [];
   for (let k = 0; k <= N; k++) {
-    delta.push(B[k].t - A[k].t);            // 秒，正 = B 慢
-    dist.push(A[k].d);                       // X 轴用参考圈的圈内距离
-    spdDiff.push(B[k].v - A[k].v);           // 速度差 km/h，负 = B 慢
-    pct.push(k / N * 100);                   // 圈内进度 %（跨 session 对比时用，距离不可比）
+    delta.push(cmp[k].t - ref[k].t);            // 秒，正 = cmp 慢
+    dist.push(ref[k].d);                         // X 轴用基准曲线的圈内距离
+    spdDiff.push(cmp[k].v - ref[k].v);           // 速度差 km/h，负 = cmp 慢
+    pct.push(k / N * 100);                       // 圈内进度 %（跨 session 对比时用，距离不可比）
   }
   // 速度差做一点平滑，避免逐点抖动看不出趋势
   const sm = k => {
@@ -276,21 +278,29 @@ function compareLaps(sA, lapA, sB, lapB, N = 1000) {
     const i0 = Math.round(z / zoneN * N), i1 = Math.round((z + 1) / zoneN * N);
     zones.push({
       from: i0 / N * 100, to: i1 / N * 100,
-      gain: delta[i1] - delta[i0],                 // 正 = B 在这段净丢时间
+      gain: delta[i1] - delta[i0],                 // 正 = cmp 在这段净丢时间
       dAvg: (dist[i0] + dist[i1]) / 2,
       spdAvg: spdDiffS.slice(i0, i1 + 1).reduce((a, b) => a + b, 0) / (i1 - i0 + 1)
     });
   }
-  const total = delta[N];
-  return {
+  return Object.assign({
     N, delta, dist, pct, spdDiff: spdDiffS, zones,
-    total,
-    lapA: lapA.index, lapB: lapB.index,
-    timeA: lapA.time_s, timeB: lapB.time_s,
-    // B 净丢时间最多的区间（正 gain）与捡回最多的（负 gain）
+    total: delta[N],
+    // cmp 净丢时间最多的区间（正 gain）与捡回最多的（负 gain）
     lost: zones.filter(z => z.gain > 0).sort((a, b) => b.gain - a.gain).slice(0, 5),
     gained: zones.filter(z => z.gain < 0).sort((a, b) => a.gain - b.gain).slice(0, 5)
-  };
+  }, meta || {});
+}
+
+/* ---------- 多圈对比：累积时间 Delta ----------
+   ref = A，cmp = B，沿用 deltaSeries 的统一语义：delta>0 = B 在这段比 A 慢 */
+function compareLaps(sA, lapA, sB, lapB, N = 1000) {
+  return deltaSeries(
+    lapTrace(sA, lapA, 'speed', N),
+    lapTrace(sB, lapB, 'speed', N),
+    N,
+    { lapA: lapA.index, lapB: lapB.index, timeA: lapA.time_s, timeB: lapB.time_s }
+  );
 }
 
 /* ---------- 轮胎 & ABS 分析（仅 iRacing） ----------
@@ -801,6 +811,78 @@ function idealLap(s, segCount = 50, laps = null) {
     // ⚠ 别只留 6 段：页面上要列「可捡时间最多的 12 段」，这里不够就只渲染出 6 行
     top: [...segs].sort((a, b) => b.gain - a.gain).slice(0, 24)
   };
+}
+
+/* ---------- 标杆圈：把「分段最优」拼成一条可对比的虚拟圈 ----------
+   idealLap 已经算出每一段最快来自哪一圈，这里把那些片段按进度拼起来，
+   得到一条与 lapTrace 同格式（{pct,d,t,v,lat,lon}、按距离等分）的曲线，
+   于是 Delta 图、分段表、指标表可以零改动复用。
+
+   时间轴不能直接沿用来源圈的 t（各圈基准不同，拼起来不自洽），改为把
+   idealLap 每段的总耗时 segs[k].time 分配到段内各采样间隔上。
+   分配权重取 1/速度（段内不再是匀速假设）：慢的地方分到更多时间，
+   于是段内时间走向与速度曲线吻合，总时长仍精确等于 idealTime。
+   （若按距离均摊，段内会出现「理论圈在某瞬间比你慢」的虚假回退。） */
+function idealLapTrace(s, N = 1000, segCount = 50) {
+  const idl = idealLap(s, segCount);
+  if (!idl) return null;
+  const a = s.analysis;
+  const best = a.best || a.full[0];
+  if (!best) return null;
+  const D = best.distance_m;
+  /* 每个来源圈的速度曲线按需算一次并缓存（同格式：按距离等分，pct 可直接对齐） */
+  const cache = {};
+  const trOf = idx => {
+    if (cache[idx] === undefined) {
+      const lp = a.full.find(l => l.index === idx) || best;
+      cache[idx] = lapTrace(s, lp, 'speed', N);
+    }
+    return cache[idx];
+  };
+  /* 第一遍：取每个采样点的速度与所属分段 */
+  const segOf = new Array(N + 1), vv = new Array(N + 1);
+  const lat = new Array(N + 1), lon = new Array(N + 1);
+  for (let k = 0; k <= N; k++) {
+    /* 采样点 k 落在哪个 seg —— 用中点避免边界抖动 */
+    const si = Math.max(0, Math.min(segCount - 1, Math.floor((k - .5) / N * segCount)));
+    segOf[k] = si;
+    const tr = trOf(idl.segs[si].lap);
+    vv[k] = Math.max(1e-3, tr[k].v);
+    lat[k] = tr[k].lat; lon[k] = tr[k].lon;
+  }
+  /* 第二遍：段内按 1/平均速度 加权分配该段总耗时（归一化后每段总量不变） */
+  const wsum = new Array(segCount).fill(0), wt = new Array(N + 1).fill(0);
+  for (let j = 1; j <= N; j++) {
+    const wj = 2 / (vv[j - 1] + vv[j]);
+    wt[j] = wj;
+    wsum[segOf[j]] += wj;
+  }
+  const out = [];
+  let t = 0;
+  for (let k = 0; k <= N; k++) {
+    if (k > 0) t += idl.segs[segOf[k]].time * (wt[k] / (wsum[segOf[k]] || 1));
+    out.push({ pct: k / N * 100, d: D * k / N, t, v: vv[k], lat: lat[k], lon: lon[k] });
+  }
+  return out;
+}
+
+/* ---------- 标杆圈对比：你的圈 vs 理论最快圈 ----------
+   ref 传理论圈、cmp 传实际圈，于是沿用 deltaSeries 的统一语义：
+   delta>0 = 你在这一段比理论慢，lost 就是「还能榨出时间」的地方。
+   返回结构与 compareLaps 一致，对比页可直接换数据源。 */
+function compareIdeal(s, lap, N = 1000, segCount = 50) {
+  const ref = idealLapTrace(s, N, segCount);
+  if (!ref) return null;
+  const idl = idealLap(s, segCount);
+  const cmp = lapTrace(s, lap, 'speed', N);
+  return deltaSeries(ref, cmp, N, {
+    lapA: -1, lapB: lap.index,
+    timeA: idl.idealTime, timeB: lap.time_s,
+    ideal: true,
+    idealTime: idl.idealTime, gap: Math.max(0, lap.time_s - idl.idealTime),
+    /* 每段还能榨出多少（理想圈视角），供分段表高亮 */
+    segs: idl.segs
+  });
 }
 
 /* ---------- 理论走线（Optimal Lap 的赛道轨迹） ----------
