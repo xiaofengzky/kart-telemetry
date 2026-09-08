@@ -547,10 +547,24 @@ function analyze(points, excluded) {
       if (!isc && inc) { raw.push([st, t]); inc = false; }
     }
     if (inc) raw.push([st, b]);
+    // 平滑横向G(窗口±6点≈±0.24s),用于判断弯向
+    const sml = t => { let s2 = 0, c = 0; for (let k = Math.max(a, t - 6); k <= Math.min(b, t + 6); k++) { s2 += latg[k]; c++; } return s2 / c; };
+    // 组合弯拆分:区段内弯向翻转(平滑值变号且强度够)即切开,S弯/复合弯不再糊成一个
+    const segs = [];
+    for (const [s0, e0] of raw) {
+      let cs = s0, csign = Math.sign(sml(s0)) || 1;
+      for (let t = s0 + 1; t <= e0; t++) {
+        const sv = sml(t), sg = Math.sign(sv) || csign;
+        if (sg !== csign && Math.abs(sv) > thr * 0.6) { segs.push([cs, t - 1, csign]); cs = t; csign = sg; }
+      }
+      segs.push([cs, e0, csign]);
+    }
+    // 合并:仅弯向相同且间隔 <8m 才合并(反向弯绝不合并;同向双顶点弯仍算一个)
     const merged = [];
-    for (const [s, e] of raw) {
-      if (merged.length && (cum[s] - cum[merged[merged.length - 1][1]]) < 12) merged[merged.length - 1] = [merged[merged.length - 1][0], e];
-      else merged.push([s, e]);
+    for (const [s0, e0, sg] of segs) {
+      const pv = merged[merged.length - 1];
+      if (pv && pv[2] === sg && (cum[s0] - cum[pv[1]]) < 8) pv[1] = e0;
+      else merged.push([s0, e0, sg]);
     }
     for (const [s, e] of merged) {
       if (cum[e] - cum[s] < 6) continue;
