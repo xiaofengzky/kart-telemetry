@@ -452,6 +452,17 @@ function analyze(points, excluded) {
     driveG[i] = dvdt - slope;
     longa[i] = dvdt;
   }
+  /* 非 iRacing(GPS 推算):25Hz 航向/速度差分会被量化噪声放大成物理不合理的假 G(曾现 2.5G+)。
+     对横向/纵向 G 做 ±5 帧(≈0.4s@25Hz)滑动平均后,再用于弯道/事件/曲线报告。iRacing 走真实通道,不处理。 */
+  if (!isIR) {
+    const W = 5;
+    const raL = latg.slice(), raD = driveG.slice();
+    for (let i = 0; i < n; i++) {
+      let sL = 0, sD = 0, c = 0;
+      for (let k = Math.max(0, i - W); k <= Math.min(n - 1, i + W); k++) { sL += raL[k]; sD += raD[k]; c++; }
+      latg[i] = sL / c; driveG[i] = sD / c;
+    }
+  }
   // 圈速识别：iRacing 直接用 Lap 通道分圈；.vbo 用「回到起点坐标」分圈
   const crossings = [0];
   if (isIR) {
