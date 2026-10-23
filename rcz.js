@@ -16,10 +16,11 @@
      30004 = 定位精度    int32 pair mm
    4/5/6/3000x 通常 5Hz,1/2/3 为 10Hz → 统一插值到时间轴。
 
-   ⚠ 坐标编码:部分设备/版本的 lat/lon 带非标准缩放(实测汉赛跑跑
-     这份几何长度偏小 1.61 倍),因此用「累计距离通道 / 坐标几何长度」
-     做一次自适应校准(geoScale),保证 analyze() 里的距离/分段准确。
-     绝对定位若因此不可用,赛道图可走路线图模式或手动对齐。
+   ⚠ 坐标编码:RaceChrono 的 lat/lon 不是标准 E7,而是「度 × 6e6」
+     (= 度分 × 1e5,这样 ±180° 都在 int32 范围内)。用真实场地交叉
+     验证过(汉赛跑跑 ÷6e6 后周长与里程通道比值 1.000,落点 30.50N
+     /113.96E 正确)。代码按里程通道在 6e6 / 1e7 之间自动择优,并对
+     明显异常的比例做兜底缩放。
    ================================================================ */
 
 /* ---------- zip 解压(零依赖,浏览器 DecompressionStream) ---------- */
@@ -175,15 +176,28 @@ function parseRCZFiles(files) {
   }
   if (n < 10) throw new Error('.rcz 数据点太少');
 
-  /* 位置(10Hz) */
-  let lat = null, lon = null;
+  /* 累计距离(mm → m):既用于坐标单位自检,也是速度缺失时的兜底 */
+  const distCh = ch[2] ? rczI64(ch[2]).map(v => v / 1000) : null;
+
+  /* 位置(10Hz):RaceChrono 不用标准 E7,而是「度 × 6e6」(= 度分 × 1e5,
+     180°×6e6=1.08e9 刚好不溢出 int32)。实测汉赛跑跑 ÷6e6 后几何周长与
+     里程通道比值正好 1.000,落点 30.50N / 113.96E 与实际场地一致。
+     为兼容可能的其它版本,按里程通道在 6e6 / 1e7 之间自动择优。 */
+  let lat = null, lon = null, geoDiv = 0;
   if (ch[3]) {
     const p = rczPairBoth(ch[3]);
-    if (p.length === n) { lat = new Float64Array(n); lon = new Float64Array(n); for (let i = 0; i < n; i++) { lat[i] = p[i][0] / 1e7; lon[i] = p[i][1] / 1e7; } }
-    else { lat = rczResample(new Float64Array(p.map(x => x[0] / 1e7)), n); lon = rczResample(new Float64Array(p.map(x => x[1] / 1e7)), n); }
+    const rl = p.map(x => x[0]), rn = p.map(x => x[1]);
+    const distTotal = distCh && distCh.length > 1 ? (distCh[distCh.length - 1] - distCh[0]) : 0;
+    let bestErr = Infinity, bestLa = null, bestLo = null;
+    for (const div of [6e6, 1e7]) {
+      const la = rl.map(x => x / div), lo = rn.map(x => x / div);
+      const gl = rczGeoLen(la, lo);
+      const err = (distTotal > 50 && gl > 50) ? Math.abs(gl / distTotal - 1) : (div === 6e6 ? 0 : 1);
+      if (err < bestErr) { bestErr = err; geoDiv = div; bestLa = la; bestLo = lo; }
+    }
+    lat = rczResample(new Float64Array(bestLa), n);
+    lon = rczResample(new Float64Array(bestLo), n);
   }
-  /* 速度 mm/s → m/s;缺失则用距离通道差分 */
-  const distCh = ch[2] ? rczI64(ch[2]).map(v => v / 1000) : null;
   let spd = null;
   if (ch[4]) spd = rczResample(new Float64Array(Array.from(rczPairFirst(ch[4]), v => v / 1000)), n);
   else if (distCh && distCh.length === n) {
@@ -195,14 +209,14 @@ function parseRCZFiles(files) {
   /* 航向 mdeg → deg(角度插值,避免 0/360 跨界假跳变) */
   const brg = ch[6] ? rczResampleAngle(new Float64Array(Array.from(rczPairFirst(ch[6]), v => v / 1000)), n) : null;
 
-  /* ---- 坐标校准:用累计距离(真值)修正非标准缩放 ---- */
+  /* ---- 坐标自检:正常(÷6e6)时里程与几何应基本一致,只在明显异常时兜底缩放 ---- */
   let geoScale = 1;
   if (lat && lon && distCh && distCh.length >= 2) {
     const gl = rczGeoLen(lat, lon);
     if (gl > 50) {
       const ratio = (distCh[distCh.length - 1] - distCh[0]) / gl;
-      if (ratio > 0.5 && ratio < 3) {
-        geoScale = ratio;
+      geoScale = Math.round(ratio * 1000) / 1000;
+      if (ratio > 1.12 || ratio < 0.88) {
         let la0 = 0, lo0 = 0;
         for (let i = 0; i < n; i++) { la0 += lat[i]; lo0 += lon[i]; }
         la0 /= n; lo0 /= n;
@@ -252,7 +266,7 @@ function parseRCZFiles(files) {
     ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
 
   return {
-    name: trackName, date, trackName, points, geoScale,
+    name: trackName, date, trackName, points, geoScale, geoDiv,
     lapCount: session.lapCount || lapsMeta.length,
     source: 'rcz'
   };
