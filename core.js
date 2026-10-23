@@ -1999,7 +1999,7 @@ function updateSessionMeta() {
   const s = curSession(), m = document.getElementById('sbMeta');
   if (!m) return;
   if (!s) { m.textContent = ''; return; }
-  m.innerHTML = `<i class="src ${s.source === 'iracing' ? 'iracing' : 'vbo'}">${s.source === 'iracing' ? 'iRacing' : 'VBOX'}</i>
+  m.innerHTML = `<i class="src ${s.source === 'iracing' ? 'iracing' : 'vbo'}">${s.source === 'iracing' ? 'iRacing' : (s.source === 'rcz' ? 'RaceChrono' : 'VBOX')}</i>
     最快 <b>${s.analysis.best_time != null ? fmtTime(s.analysis.best_time, 2) : '-'}</b>
     · 极速 <b>${s.analysis.vmax.toFixed(0)}</b> km/h · ${esc(s.date)}`;
 }
