@@ -62,7 +62,7 @@
       <div class="gmain">
         <div class="gtop">
           <span class="gname ${unnamed ? 'gname-unnamed' : ''}" title="${tip}">${esc(zh)} <span class="gdate2">${esc(String(s.date).replace(/^iRacing /, ''))}</span></span>
-          <i class="src ${ir ? 'iracing' : 'vbo'}">${ir ? 'iRacing' : 'VBOX'}</i>
+          <i class="src ${ir ? 'iracing' : 'vbo'}">${ir ? 'iRacing' : (s.source === 'rcz' ? 'RaceChrono' : 'VBOX')}</i>
           <button class="gedit" data-rename="${s.id}" title="修改赛道名（用于卡丁车 VBOX 改名：英文或中文都行，留空=未分类）">✏️ 改名</button>
         </div>
         <div class="gmeta">
