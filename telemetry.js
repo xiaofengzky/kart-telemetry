@@ -23,7 +23,7 @@
 
   function render() {
     const s = curSession(), box = document.getElementById('content');
-    if (!s) { box.innerHTML = `<div class="blank">还没有数据。<br><a href="index.html">去车库上传一个 .vbo 或 .ibt 文件</a></div>`; return; }
+    if (!s) { box.innerHTML = `<div class="blank">还没有数据。<br><a href="index.html">去车库上传一个 .vbo / .ibt / .rcz 文件</a></div>`; return; }
     const a = s.analysis, ir = !!a.isIR;
     if (!a.full.length) { box.innerHTML = `<div class="blank">这场没有识别到完整圈，无法做逐圈遥测分析。</div>`; return; }
     if (!sel.length || !sel.every(i => a.full.some(l => l.index === i))) sel = [a.best ? a.best.index : a.full[0].index];

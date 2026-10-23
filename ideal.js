@@ -37,7 +37,7 @@
 
   function render() {
     const s = curSession(), box = document.getElementById('content');
-    if (!s) { box.innerHTML = `<div class="blank">还没有数据。<br><a href="index.html">去车库上传一个 .vbo 或 .ibt 文件</a></div>`; return; }
+    if (!s) { box.innerHTML = `<div class="blank">还没有数据。<br><a href="index.html">去车库上传一个 .vbo / .ibt / .rcz 文件</a></div>`; return; }
     const a = s.analysis;
     const excl = a.excluded || [];
     if (a.full.filter(l => !l.abnormal && !excl.includes(l.index)).length < 2) {

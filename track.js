@@ -15,7 +15,7 @@
   function render() {
     const s = curSession(), box = document.getElementById('content');
     if (!s) {
-      box.innerHTML = `<div class="blank">还没有数据。<br><a href="index.html">去车库上传一个 .vbo 或 .ibt 文件</a></div>`;
+      box.innerHTML = `<div class="blank">还没有数据。<br><a href="index.html">去车库上传一个 .vbo / .ibt / .rcz 文件</a></div>`;
       return;
     }
     if (!map) initMap();
@@ -78,7 +78,9 @@
         <p class="chint">
           ${s.source === 'iracing'
           ? 'iRacing 的 .ibt 坐标是模拟器输出的精确 WGS84，赛道会直接落在真实场地上，通常不需要对齐。'
-          : 'VBO 的经纬度按官方格式（十进制分钟、经度正数为西经）解析，赛道已落在真实场地位置。若仍有几米误差属 GPS 正常漂移，可用上方「对齐场地」微调。'}<br>
+          : s.source === 'rcz'
+            ? 'RaceChrono 的 .rcz 用设备内部编码存坐标（轨迹形状和距离已按里程通道自动校准），卫星底图上可能不落位；如需精确叠加，用上方「对齐场地」微调即可。'
+            : 'VBO 的经纬度按官方格式（十进制分钟、经度正数为西经）解析，赛道已落在真实场地位置。若仍有几米误差属 GPS 正常漂移，可用上方「对齐场地」微调。'}<br>
           当前场地中心：<b>${cen.lat.toFixed(5)}, ${cen.lon.toFixed(5)}</b>
         </p>
       </div>`;

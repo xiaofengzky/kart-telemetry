@@ -463,12 +463,14 @@ function analyze(points, excluded) {
       latg[i] = sL / c; driveG[i] = sD / c;
     }
   }
-  // 圈速识别：iRacing 直接用 Lap 通道分圈；.vbo 用「回到起点坐标」分圈
+  // 圈速识别：iRacing 直接用 Lap 通道、RaceChrono(.rcz) 用 lapNo 计时线分圈；.vbo 用「回到起点坐标」分圈
+  const hasLapNo = points[0] && points[0].lapNo !== undefined;
   const crossings = [0];
-  if (isIR) {
-    let lastLap = points[0].lap;
+  if (isIR || hasLapNo) {
+    let lastLap = isIR ? points[0].lap : points[0].lapNo;
     for (let i = 1; i < n; i++) {
-      if (points[i].lap !== lastLap) { crossings.push(i); lastLap = points[i].lap; }
+      const key = isIR ? points[i].lap : points[i].lapNo;
+      if (key !== lastLap) { crossings.push(i); lastLap = key; }
     }
   } else {
     const sx = xy[0].x, sy = xy[0].y;
@@ -491,7 +493,7 @@ function analyze(points, excluded) {
     for (let t = a; t <= b; t++) seg.push(points[t].vel);
     let mg = 0; for (let t = a; t <= b; t++) mg = Math.max(mg, Math.abs(latg[t]));
     laps.push({
-      index: k, startIdx: a, endIdx: b,
+      index: hasLapNo ? (points[a].lapNo != null ? points[a].lapNo : k) : k, startIdx: a, endIdx: b,
       time_s: points[b].t - points[a].t,
       distance_m: cum[b] - cum[a],
       max_speed: Math.max(...seg), min_speed: Math.min(...seg),
@@ -931,8 +933,33 @@ function loadIBT(file, onDone) {
   };
   reader.readAsArrayBuffer(file);
 }
+function loadRCZ(file, onDone) {
+  const reader = new FileReader();
+  reader.onload = async e => {
+    try {
+      const r = await parseRCZ(e.target.result);
+      if (!r || !r.points || r.points.length < 50) { showLoadError('.rcz 有效数据点太少：' + file.name); return; }
+      const s = {
+        id: Date.now() + '_' + SESSIONS.length, name: r.name, date: r.date,
+        points: r.points, source: 'rcz', track: r.trackName || r.name,
+        offset: { dLat: 0, dLon: 0 }, excluded: [], geoScale: r.geoScale,
+        analysis: analyze(r.points)
+      };
+      SESSIONS.push(s);
+      renderSidebar();
+      if (SESSIONS.length === 1) selectSession(s.id);
+      dbSave(s);   // 持久化
+      onDone && onDone(s);
+    } catch (err) {
+      console.error(err);
+      showLoadError('解析 .rcz 失败：' + file.name + '<br>' + (err && err.message));
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
 function loadFile(file, onDone) {
   if (/\.ibt$/i.test(file.name)) { loadIBT(file, onDone); return; }
+  if (/\.rcz$/i.test(file.name)) { loadRCZ(file, onDone); return; }
   const reader = new FileReader();
   reader.onload = e => {
     const parsed = parseVBO(e.target.result);
@@ -2257,8 +2284,8 @@ function selectSession(id) {
 /* 上传文件（支持多选 / 拖拽） */
 function uploadFiles(fileList, onDone) {
   let n = 0;
-  const files = [...fileList].filter(f => /\.(vbo|ibt)$/i.test(f.name));
-  if (!files.length) { showLoadError('只支持 .vbo（卡丁车 VBOX）和 .ibt（iRacing）文件'); return; }
+  const files = [...fileList].filter(f => /\.(vbo|ibt|rcz)$/i.test(f.name));
+  if (!files.length) { showLoadError('只支持 .vbo（卡丁车 VBOX）、.ibt（iRacing）和 .rcz（RaceChrono）文件'); return; }
   for (const f of files) {
     n++;
     loadFile(f, s => { if (s) { setCurSession(s.id); } if (onDone) onDone(s); });

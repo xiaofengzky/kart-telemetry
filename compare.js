@@ -92,7 +92,7 @@
   function render() {
     const cur = curSession(), box = document.getElementById('content');
     if (!cur) {
-      box.innerHTML = `<div class="blank">还没有数据。<br><a href="index.html">去车库上传一个 .vbo 或 .ibt 文件</a></div>`;
+      box.innerHTML = `<div class="blank">还没有数据。<br><a href="index.html">去车库上传一个 .vbo / .ibt / .rcz 文件</a></div>`;
       return;
     }
     const sid = cur.id;

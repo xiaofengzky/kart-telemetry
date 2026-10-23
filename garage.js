@@ -9,7 +9,7 @@
     const dz = document.getElementById('dropZone');
     if (!SESSIONS.length) {
       cnt.textContent = '';
-      list.innerHTML = `<div class="blank">还没有数据。<br>拖入一个 .vbo 或 .ibt 文件就能开始分析。</div>`;
+      list.innerHTML = `<div class="blank">还没有数据。<br>拖入一个 .vbo / .ibt / .rcz 文件就能开始分析。</div>`;
       if (dz) dz.style.display = 'block';
       return;
     }

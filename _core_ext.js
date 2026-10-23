@@ -1240,8 +1240,8 @@ function selectSession(id) {
 /* 上传文件（支持多选 / 拖拽） */
 function uploadFiles(fileList, onDone) {
   let n = 0;
-  const files = [...fileList].filter(f => /\.(vbo|ibt)$/i.test(f.name));
-  if (!files.length) { showLoadError('只支持 .vbo（卡丁车 VBOX）和 .ibt（iRacing）文件'); return; }
+  const files = [...fileList].filter(f => /\.(vbo|ibt|rcz)$/i.test(f.name));
+  if (!files.length) { showLoadError('只支持 .vbo（卡丁车 VBOX）、.ibt（iRacing）和 .rcz（RaceChrono）文件'); return; }
   for (const f of files) {
     n++;
     loadFile(f, s => { if (s) { setCurSession(s.id); } if (onDone) onDone(s); });
