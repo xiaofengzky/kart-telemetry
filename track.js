@@ -76,6 +76,7 @@
       <div class="card">
         <h3>坐标与对齐</h3>
         <p class="chint">
+          ${s.staleRcz ? '<span style="color:#ffb020;font-weight:500">⚠ 这份 .rcz 是旧版本解析的（坐标按错误单位换算，会落到海上），请删除本场后重新拖入原文件。</span><br>' : ''}
           ${s.source === 'iracing'
           ? 'iRacing 的 .ibt 坐标是模拟器输出的精确 WGS84，赛道会直接落在真实场地上，通常不需要对齐。'
           : s.source === 'rcz'

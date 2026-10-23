@@ -63,6 +63,7 @@
         <div class="gtop">
           <span class="gname ${unnamed ? 'gname-unnamed' : ''}" title="${tip}">${esc(zh)} <span class="gdate2">${esc(String(s.date).replace(/^iRacing /, ''))}</span></span>
           <i class="src ${ir ? 'iracing' : 'vbo'}">${ir ? 'iRacing' : (s.source === 'rcz' ? 'RaceChrono' : 'VBOX')}</i>
+          ${s.staleRcz ? '<i class="src" style="color:#ffb020;border-color:rgba(255,176,32,.55)" title="这是旧版本解析的 .rcz（坐标错误），删除本场后重新拖入文件即可">⚠ 需重导</i>' : ''}
           <button class="gedit" data-rename="${s.id}" title="修改赛道名（用于卡丁车 VBOX 改名：英文或中文都行，留空=未分类）">✏️ 改名</button>
         </div>
         <div class="gmeta">

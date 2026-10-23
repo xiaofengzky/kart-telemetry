@@ -942,7 +942,7 @@ function loadRCZ(file, onDone) {
       const s = {
         id: Date.now() + '_' + SESSIONS.length, name: r.name, date: r.date,
         points: r.points, source: 'rcz', track: r.trackName || r.name,
-        offset: { dLat: 0, dLon: 0 }, excluded: [], geoScale: r.geoScale,
+        offset: { dLat: 0, dLon: 0 }, excluded: [], geoScale: r.geoScale, geoDiv: r.geoDiv,
         analysis: analyze(r.points)
       };
       SESSIONS.push(s);
@@ -999,6 +999,7 @@ function dbSave(s) {
         points: s.points, offset: s.offset || { dLat: 0, dLon: 0 },
         track: s.track || (s.source === 'iracing' ? s.name : ''),
         tireByLap: s.tireByLap || null,
+        geoDiv: s.geoDiv || 0, geoScale: s.geoScale || 1,
         excluded: (s.excluded || []).slice(), savedAt: Date.now()
       });
       tx.oncomplete = res; tx.onerror = () => res();
@@ -1024,6 +1025,9 @@ function rebuildSession(rec) {
   const s = { id: rec.id, name: rec.name, date: rec.date, source: rec.source || 'vbo',
     track: rec.track || (rec.source === 'iracing' ? rec.name : ''),
     points: rec.points, offset: rec.offset || { dLat: 0, dLon: 0 }, tireByLap: rec.tireByLap || null,
+    geoDiv: rec.geoDiv || 0, geoScale: rec.geoScale || 1,
+    /* v36 及更早解析的 .rcz:坐标单位错误(按 1e7 解),必须让用户重新导入 */
+    staleRcz: (rec.source === 'rcz' && !rec.geoDiv),
     excluded, analysis: analyze(rec.points, excluded) };
   return s;
 }
